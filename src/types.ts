@@ -1,10 +1,3 @@
-export type HarnessMessageRole = "system" | "user" | "assistant" | "tool";
-
-export interface HarnessMessage {
-  readonly role: HarnessMessageRole;
-  readonly content: string;
-}
-
 export interface ToolExecutionContext {
   readonly sessionId: string;
   readonly signal?: AbortSignal;
