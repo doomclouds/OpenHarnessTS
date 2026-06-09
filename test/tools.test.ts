@@ -2,10 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   createToolErrorResult,
   createToolResult,
+  createToolResultBlockFromToolResult,
+  executeRegisteredTool,
   normalizeToolResult,
   ToolRegistry
 } from "../src/tools/index.js";
-import type { ToolDefinition } from "../src/tools/index.js";
+import type {
+  ToolDefinition,
+  ToolExecutionContext
+} from "../src/tools/index.js";
 
 describe("tool results", () => {
   it("creates a successful tool result with defaults", () => {
@@ -110,6 +115,13 @@ function createEchoTool(name = "echo"): ToolDefinition {
     }
   };
 }
+
+const executionContext: ToolExecutionContext = {
+  cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+  metadata: {
+    session: "test-session"
+  }
+};
 
 describe("tool registry", () => {
   it("registers and retrieves a tool by name", () => {
@@ -305,6 +317,240 @@ describe("tool registry", () => {
       type: "object",
       properties: {
         value: { type: "string" }
+      }
+    });
+  });
+});
+
+describe("registered tool execution", () => {
+  it("executes a registered tool with raw input", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "echo",
+      description: "Echoes input.",
+      execute(input, context) {
+        return createToolResult({
+          output: `${String(input)}:${context.cwd}:${String(
+            context.metadata.session
+          )}`
+        });
+      }
+    });
+
+    const result = await executeRegisteredTool(
+      registry,
+      {
+        toolUseId: "toolu_echo",
+        toolName: "echo",
+        input: "hello"
+      },
+      executionContext
+    );
+
+    expect(result).toEqual({
+      output:
+        "hello:C:/WorkSpace/ResearchProjects/OpenHarnessTS:test-session",
+      isError: false,
+      metadata: {}
+    });
+  });
+
+  it("passes validated input to execute", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "double",
+      description: "Doubles a number.",
+      validateInput(input) {
+        if (
+          typeof input === "object" &&
+          input !== null &&
+          typeof (input as { value?: unknown }).value === "number"
+        ) {
+          return {
+            ok: true,
+            value: { value: (input as { value: number }).value }
+          };
+        }
+
+        return {
+          ok: false,
+          error: "value must be a number"
+        };
+      },
+      execute(input: { value: number }) {
+        return createToolResult({ output: String(input.value * 2) });
+      }
+    });
+
+    const result = await executeRegisteredTool(
+      registry,
+      {
+        toolUseId: "toolu_double",
+        toolName: "double",
+        input: { value: 5 }
+      },
+      executionContext
+    );
+
+    expect(result.output).toBe("10");
+    expect(result.isError).toBe(false);
+  });
+
+  it("returns an unknown-tool error result without throwing", async () => {
+    const result = await executeRegisteredTool(
+      new ToolRegistry(),
+      {
+        toolUseId: "toolu_missing",
+        toolName: "missing",
+        input: {}
+      },
+      executionContext
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("Unknown tool: missing");
+  });
+
+  it("returns a validation-failure error result without throwing", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "validated",
+      description: "Validated tool.",
+      validateInput() {
+        return {
+          ok: false,
+          error: "bad input"
+        };
+      },
+      execute() {
+        return createToolResult({ output: "should not run" });
+      }
+    });
+
+    const result = await executeRegisteredTool(
+      registry,
+      {
+        toolUseId: "toolu_validated",
+        toolName: "validated",
+        input: {}
+      },
+      executionContext
+    );
+
+    expect(result).toEqual({
+      output: "Invalid input for validated: bad input",
+      isError: true,
+      metadata: {}
+    });
+  });
+
+  it("normalizes thrown validator errors", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "throwing_validator",
+      description: "Throws in validation.",
+      validateInput() {
+        throw new Error("validator exploded");
+      },
+      execute() {
+        return createToolResult({ output: "should not run" });
+      }
+    });
+
+    const result = await executeRegisteredTool(
+      registry,
+      {
+        toolUseId: "toolu_validator",
+        toolName: "throwing_validator",
+        input: {}
+      },
+      executionContext
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain(
+      "Invalid input for throwing_validator: validator exploded"
+    );
+  });
+
+  it("normalizes thrown execute errors", async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "throwing_execute",
+      description: "Throws during execution.",
+      execute() {
+        throw new Error("execute exploded");
+      }
+    });
+
+    const result = await executeRegisteredTool(
+      registry,
+      {
+        toolUseId: "toolu_execute",
+        toolName: "throwing_execute",
+        input: {}
+      },
+      executionContext
+    );
+
+    expect(result).toEqual({
+      output: "Tool throwing_execute failed: execute exploded",
+      isError: true,
+      metadata: {}
+    });
+  });
+
+  it("normalizes successful result metadata", async () => {
+    const registry = new ToolRegistry();
+    const metadata = { count: 0, ok: false };
+    registry.register({
+      name: "metadata",
+      description: "Returns metadata.",
+      execute() {
+        return createToolResult({
+          output: "done",
+          metadata
+        });
+      }
+    });
+
+    const result = await executeRegisteredTool(
+      registry,
+      {
+        toolUseId: "toolu_metadata",
+        toolName: "metadata",
+        input: {}
+      },
+      executionContext
+    );
+
+    metadata.count = 1;
+
+    expect(result).toEqual({
+      output: "done",
+      isError: false,
+      metadata: {
+        count: 0,
+        ok: false
+      }
+    });
+  });
+
+  it("converts tool results into tool result blocks", () => {
+    const block = createToolResultBlockFromToolResult({
+      toolUseId: "toolu_result",
+      result: createToolErrorResult("failed", {
+        reason: "test"
+      })
+    });
+
+    expect(block).toEqual({
+      type: "tool_result",
+      toolUseId: "toolu_result",
+      content: "failed",
+      isError: true,
+      metadata: {
+        reason: "test"
       }
     });
   });
