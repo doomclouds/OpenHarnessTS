@@ -58,6 +58,21 @@ describe("message content blocks", () => {
     });
   });
 
+  it("preserves tool result ids as opaque identifiers", () => {
+    expect(
+      createToolResultBlock({
+        toolUseId: " toolu_fixed ",
+        content: "done"
+      })
+    ).toEqual({
+      type: "tool_result",
+      toolUseId: " toolu_fixed ",
+      content: "done",
+      isError: false,
+      metadata: {}
+    });
+  });
+
   it("rejects a missing tool result id", () => {
     expect(() =>
       createToolResultBlock({

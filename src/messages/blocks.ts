@@ -72,15 +72,13 @@ export function createToolResultBlock(args: {
   readonly isError?: boolean;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }): ToolResultBlock {
-  const toolUseId = args.toolUseId.trim();
-
-  if (toolUseId.length === 0) {
+  if (args.toolUseId.trim().length === 0) {
     throw new Error("Tool result must reference a tool use id.");
   }
 
   return {
     type: "tool_result",
-    toolUseId,
+    toolUseId: args.toolUseId,
     content: args.content,
     isError: args.isError ?? false,
     metadata: args.metadata ?? {}
