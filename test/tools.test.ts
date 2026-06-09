@@ -364,11 +364,13 @@ describe("registered tool execution", () => {
         if (
           typeof input === "object" &&
           input !== null &&
-          typeof (input as { value?: unknown }).value === "number"
+          typeof (input as { value?: unknown }).value === "string"
         ) {
+          const value = Number((input as { value: string }).value);
+
           return {
             ok: true,
-            value: { value: (input as { value: number }).value }
+            value: { value }
           };
         }
 
@@ -378,6 +380,9 @@ describe("registered tool execution", () => {
         };
       },
       execute(input: { value: number }) {
+        expect(input.value).toBe(5);
+        expect("ignored" in input).toBe(false);
+
         return createToolResult({ output: String(input.value * 2) });
       }
     });
@@ -387,7 +392,7 @@ describe("registered tool execution", () => {
       {
         toolUseId: "toolu_double",
         toolName: "double",
-        input: { value: 5 }
+        input: { value: "5", ignored: true }
       },
       executionContext
     );
@@ -413,6 +418,8 @@ describe("registered tool execution", () => {
 
   it("returns a validation-failure error result without throwing", async () => {
     const registry = new ToolRegistry();
+    let executed = false;
+
     registry.register({
       name: "validated",
       description: "Validated tool.",
@@ -423,6 +430,8 @@ describe("registered tool execution", () => {
         };
       },
       execute() {
+        executed = true;
+
         return createToolResult({ output: "should not run" });
       }
     });
@@ -442,10 +451,13 @@ describe("registered tool execution", () => {
       isError: true,
       metadata: {}
     });
+    expect(executed).toBe(false);
   });
 
   it("normalizes thrown validator errors", async () => {
     const registry = new ToolRegistry();
+    let executed = false;
+
     registry.register({
       name: "throwing_validator",
       description: "Throws in validation.",
@@ -453,6 +465,8 @@ describe("registered tool execution", () => {
         throw new Error("validator exploded");
       },
       execute() {
+        executed = true;
+
         return createToolResult({ output: "should not run" });
       }
     });
@@ -471,6 +485,7 @@ describe("registered tool execution", () => {
     expect(result.output).toContain(
       "Invalid input for throwing_validator: validator exploded"
     );
+    expect(executed).toBe(false);
   });
 
   it("normalizes thrown execute errors", async () => {
@@ -507,10 +522,11 @@ describe("registered tool execution", () => {
       name: "metadata",
       description: "Returns metadata.",
       execute() {
-        return createToolResult({
+        return {
           output: "done",
+          isError: false,
           metadata
-        });
+        };
       }
     });
 
