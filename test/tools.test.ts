@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createToolErrorResult, createToolResult } from "../src/tools/index.js";
+import {
+  createToolErrorResult,
+  createToolResult,
+  normalizeToolResult
+} from "../src/tools/index.js";
 
 describe("tool results", () => {
   it("creates a successful tool result with defaults", () => {
@@ -45,6 +49,25 @@ describe("tool results", () => {
 
     expect(result.metadata).toEqual({ value: "original" });
     expect(result.metadata).not.toBe(metadata);
+  });
+
+  it("normalizes a tool result with shallow-copied metadata", () => {
+    const metadata = { count: 0 };
+    const result = {
+      output: "failed",
+      isError: true,
+      metadata
+    };
+
+    const normalized = normalizeToolResult(result);
+    metadata.count = 1;
+
+    expect(normalized).toEqual({
+      output: "failed",
+      isError: true,
+      metadata: { count: 0 }
+    });
+    expect(normalized.metadata).not.toBe(result.metadata);
   });
 
   it("creates an explicit error result", () => {
