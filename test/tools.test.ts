@@ -8,9 +8,11 @@ import {
   ToolRegistry
 } from "../src/tools/index.js";
 import {
+  createToolErrorResult as createToolErrorResultFromRoot,
   createToolResult as createToolResultFromRoot,
   createToolResultBlockFromToolResult as createToolResultBlockFromRoot,
   executeRegisteredTool as executeRegisteredToolFromRoot,
+  normalizeToolResult as normalizeToolResultFromRoot,
   ToolRegistry as ToolRegistryFromRoot
 } from "../src/index.js";
 import type {
@@ -18,8 +20,13 @@ import type {
   ToolExecutionContext
 } from "../src/tools/index.js";
 import type {
+  JsonSchema as RootJsonSchema,
+  RegisteredToolCall as RootRegisteredToolCall,
+  ToolApiSchema as RootToolApiSchema,
   ToolDefinition as RootToolDefinition,
   ToolExecutionContext as RootToolExecutionContext,
+  ToolInputValidationResult as RootToolInputValidationResult,
+  ToolInputValidator as RootToolInputValidator,
   ToolResult as RootToolResult
 } from "../src/index.js";
 
@@ -586,6 +593,36 @@ describe("registered tool execution", () => {
 describe("tool root exports", () => {
   it("exports the tool protocol from the package root", async () => {
     const registry = new ToolRegistryFromRoot();
+    const schema: RootJsonSchema = { type: "object", properties: {} };
+    const call: RootRegisteredToolCall = {
+      toolUseId: "toolu_root_types",
+      toolName: "echo",
+      input: {}
+    };
+    const apiSchema: RootToolApiSchema = {
+      name: "echo",
+      description: "Echoes input.",
+      input_schema: schema
+    };
+    const validator: RootToolInputValidator<{ value: string }> = (input) => {
+      if (
+        typeof input === "object" &&
+        input !== null &&
+        typeof (input as { value?: unknown }).value === "string"
+      ) {
+        return {
+          ok: true,
+          value: { value: (input as { value: string }).value }
+        };
+      }
+
+      return {
+        ok: false,
+        error: "value must be a string"
+      };
+    };
+    const validation: RootToolInputValidationResult<{ value: string }> =
+      validator({ value: "ok" });
     const tool: RootToolDefinition = {
       name: "echo",
       description: "Echoes input.",
@@ -613,13 +650,35 @@ describe("tool root exports", () => {
       toolUseId: "toolu_root",
       result
     });
+    const errorResult = createToolErrorResultFromRoot("failed");
+    const normalized = normalizeToolResultFromRoot({
+      output: "normalized",
+      isError: false,
+      metadata: { source: "root" }
+    });
 
+    expect(apiSchema.input_schema).toBe(schema);
+    expect(call.toolName).toBe("echo");
+    expect(validation).toEqual({
+      ok: true,
+      value: { value: "ok" }
+    });
     expect(block).toEqual({
       type: "tool_result",
       toolUseId: "toolu_root",
       content: "hello",
       isError: false,
       metadata: {}
+    });
+    expect(errorResult).toEqual({
+      output: "failed",
+      isError: true,
+      metadata: {}
+    });
+    expect(normalized).toEqual({
+      output: "normalized",
+      isError: false,
+      metadata: { source: "root" }
     });
   });
 });
