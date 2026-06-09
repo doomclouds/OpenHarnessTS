@@ -1,12 +1,14 @@
-import type {
-  HarnessRuntimeOptions,
-  ToolDefinition,
-  ToolExecutionContext,
-  ToolResult
-} from "./types.js";
+import {
+  executeRegisteredTool,
+  ToolRegistry,
+  type ToolDefinition,
+  type ToolExecutionContext,
+  type ToolResult
+} from "./tools/index.js";
+import type { HarnessRuntimeOptions } from "./types.js";
 
 export class HarnessRuntime {
-  private readonly tools = new Map<string, ToolDefinition>();
+  private readonly registry = new ToolRegistry();
 
   public constructor(options: HarnessRuntimeOptions = {}) {
     for (const tool of options.tools ?? []) {
@@ -15,48 +17,30 @@ export class HarnessRuntime {
   }
 
   public registerTool(tool: ToolDefinition): void {
-    const name = tool.name.trim();
-
-    if (name.length === 0) {
-      throw new Error("Tool name cannot be empty.");
-    }
-
-    if (this.tools.has(name)) {
-      throw new Error(`Tool '${name}' is already registered.`);
-    }
-
-    this.tools.set(name, { ...tool, name });
+    this.registry.register(tool);
   }
 
   public listTools(): readonly ToolDefinition[] {
-    return [...this.tools.values()];
+    return this.registry.listTools();
   }
 
   public getTool(name: string): ToolDefinition | undefined {
-    return this.tools.get(name);
+    return this.registry.getTool(name);
   }
 
-  public async executeTool<TOutput = unknown>(
+  public executeTool(
     name: string,
     input: unknown,
     context: ToolExecutionContext
-  ): Promise<ToolResult<TOutput>> {
-    const tool = this.getTool(name);
-
-    if (!tool) {
-      return {
-        ok: false,
-        error: `Tool '${name}' is not registered.`
-      };
-    }
-
-    try {
-      return (await tool.execute(input, context)) as ToolResult<TOutput>;
-    } catch (error) {
-      return {
-        ok: false,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
+  ): Promise<ToolResult> {
+    return executeRegisteredTool(
+      this.registry,
+      {
+        toolUseId: `runtime_${name}`,
+        toolName: name,
+        input
+      },
+      context
+    );
   }
 }

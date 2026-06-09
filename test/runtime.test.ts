@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { HarnessRuntime } from "../src/index.js";
+import { createToolResult } from "../src/tools/index.js";
 import type { ToolExecutionContext } from "../src/index.js";
 
 const context: ToolExecutionContext = {
-  sessionId: "test-session",
-  metadata: {}
+  cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+  metadata: {
+    session: "test-session"
+  }
 };
 
 describe("HarnessRuntime", () => {
@@ -15,18 +18,18 @@ describe("HarnessRuntime", () => {
       name: "echo",
       description: "Echoes input.",
       execute(input) {
-        return {
-          ok: true,
-          output: input
-        };
+        return createToolResult({
+          output: String(input)
+        });
       }
     });
 
     const result = await runtime.executeTool("echo", "hello", context);
 
     expect(result).toEqual({
-      ok: true,
-      output: "hello"
+      output: "hello",
+      isError: false,
+      metadata: {}
     });
   });
 
@@ -35,8 +38,8 @@ describe("HarnessRuntime", () => {
 
     const result = await runtime.executeTool("missing", {}, context);
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("not registered");
+    expect(result.isError).toBe(true);
+    expect(result.output).toContain("Unknown tool: missing");
   });
 
   it("rejects duplicate tool registrations", () => {
@@ -45,7 +48,7 @@ describe("HarnessRuntime", () => {
         {
           name: "echo",
           description: "Echoes input.",
-          execute: () => ({ ok: true })
+          execute: () => createToolResult({ output: "ok" })
         }
       ]
     });
@@ -54,7 +57,7 @@ describe("HarnessRuntime", () => {
       runtime.registerTool({
         name: "echo",
         description: "Echoes input again.",
-        execute: () => ({ ok: true })
+        execute: () => createToolResult({ output: "ok" })
       })
     ).toThrow("already registered");
   });

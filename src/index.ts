@@ -1,10 +1,23 @@
 export { HarnessRuntime } from "./runtime.js";
+export type { HarnessRuntimeOptions } from "./types.js";
+export {
+  createToolErrorResult,
+  createToolResult,
+  createToolResultBlockFromToolResult,
+  executeRegisteredTool,
+  normalizeToolResult,
+  ToolRegistry
+} from "./tools/index.js";
 export type {
-  HarnessRuntimeOptions,
+  JsonSchema,
+  RegisteredToolCall,
+  ToolApiSchema,
   ToolDefinition,
   ToolExecutionContext,
+  ToolInputValidationResult,
+  ToolInputValidator,
   ToolResult
-} from "./types.js";
+} from "./tools/index.js";
 export {
   createAssistantMessage,
   createTextBlock,
