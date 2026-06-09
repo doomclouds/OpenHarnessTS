@@ -6,7 +6,13 @@ const DEFAULT_INPUT_SCHEMA: JsonSchema = {
 };
 
 function cloneJsonSchema(schema: JsonSchema): JsonSchema {
-  return structuredClone(schema) as JsonSchema;
+  return structuredClone(schema);
+}
+
+function copyToolDefinition(tool: ToolDefinition): ToolDefinition {
+  return tool.inputSchema === undefined
+    ? { ...tool }
+    : { ...tool, inputSchema: cloneJsonSchema(tool.inputSchema) };
 }
 
 export class ToolRegistry {
@@ -23,16 +29,13 @@ export class ToolRegistry {
       throw new Error(`Tool '${name}' is already registered.`);
     }
 
-    const registeredTool =
-      tool.inputSchema === undefined
-        ? { ...tool, name }
-        : { ...tool, name, inputSchema: cloneJsonSchema(tool.inputSchema) };
-
-    this.tools.set(name, registeredTool);
+    this.tools.set(name, copyToolDefinition({ ...tool, name }));
   }
 
   public getTool(name: string): ToolDefinition | undefined {
-    return this.tools.get(name.trim());
+    const tool = this.tools.get(name.trim());
+
+    return tool === undefined ? undefined : copyToolDefinition(tool);
   }
 
   public hasTool(name: string): boolean {
@@ -40,7 +43,7 @@ export class ToolRegistry {
   }
 
   public listTools(): readonly ToolDefinition[] {
-    return [...this.tools.values()];
+    return [...this.tools.values()].map((tool) => copyToolDefinition(tool));
   }
 
   public toApiSchema(): readonly ToolApiSchema[] {

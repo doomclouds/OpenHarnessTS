@@ -270,4 +270,42 @@ describe("tool registry", () => {
       }
     });
   });
+
+  it("isolates input schemas returned from getTool", () => {
+    const registry = new ToolRegistry();
+    registry.register(createEchoTool("echo"));
+
+    const retrieved = registry.getTool("echo") as ToolDefinition & {
+      inputSchema: Record<string, unknown>;
+    };
+    retrieved.inputSchema.properties = {
+      value: { type: "number" }
+    };
+
+    expect(registry.toApiSchema()[0]?.input_schema).toEqual({
+      type: "object",
+      properties: {
+        value: { type: "string" }
+      }
+    });
+  });
+
+  it("isolates input schemas returned from listTools", () => {
+    const registry = new ToolRegistry();
+    registry.register(createEchoTool("echo"));
+
+    const listed = registry.listTools()[0] as ToolDefinition & {
+      inputSchema: Record<string, unknown>;
+    };
+    listed.inputSchema.properties = {
+      value: { type: "number" }
+    };
+
+    expect(registry.toApiSchema()[0]?.input_schema).toEqual({
+      type: "object",
+      properties: {
+        value: { type: "string" }
+      }
+    });
+  });
 });
