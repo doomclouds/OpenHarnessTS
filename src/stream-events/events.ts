@@ -76,8 +76,8 @@ export function createAssistantTurnCompleteEvent(args: {
   return {
     type: "assistant_turn_complete",
     message: args.message,
-    ...(args.usage ? { usage: args.usage } : {}),
-    ...(args.stopReason ? { stopReason: args.stopReason } : {})
+    ...(args.usage !== undefined ? { usage: args.usage } : {}),
+    ...(args.stopReason !== undefined ? { stopReason: args.stopReason } : {})
   };
 }
 
@@ -90,7 +90,7 @@ export function createToolExecutionStartedEvent(args: {
     type: "tool_execution_started",
     toolName: args.toolName,
     toolInput: args.toolInput,
-    ...(args.toolUseId ? { toolUseId: args.toolUseId } : {})
+    ...(args.toolUseId !== undefined ? { toolUseId: args.toolUseId } : {})
   };
 }
 
@@ -106,8 +106,8 @@ export function createToolExecutionCompletedEvent(args: {
     toolName: args.toolName,
     output: args.output,
     isError: args.isError ?? false,
-    ...(args.metadata ? { metadata: args.metadata } : {}),
-    ...(args.toolUseId ? { toolUseId: args.toolUseId } : {})
+    ...(args.metadata !== undefined ? { metadata: args.metadata } : {}),
+    ...(args.toolUseId !== undefined ? { toolUseId: args.toolUseId } : {})
   };
 }
 

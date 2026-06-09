@@ -40,6 +40,29 @@ describe("stream events", () => {
     });
   });
 
+  it("preserves explicit assistant completion fields with falsy values", () => {
+    const message = createAssistantMessage([createTextBlock("done")]);
+
+    expect(
+      createAssistantTurnCompleteEvent({
+        message,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0
+        },
+        stopReason: ""
+      })
+    ).toEqual({
+      type: "assistant_turn_complete",
+      message,
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0
+      },
+      stopReason: ""
+    });
+  });
+
   it("rejects assistant completion events for non-assistant messages", () => {
     expect(() =>
       createAssistantTurnCompleteEvent({
@@ -66,6 +89,21 @@ describe("stream events", () => {
     });
   });
 
+  it("preserves explicit tool started fields with falsy values", () => {
+    expect(
+      createToolExecutionStartedEvent({
+        toolName: "echo",
+        toolInput: {},
+        toolUseId: ""
+      })
+    ).toEqual({
+      type: "tool_execution_started",
+      toolName: "echo",
+      toolInput: {},
+      toolUseId: ""
+    });
+  });
+
   it("creates tool execution completed events with defaults", () => {
     expect(
       createToolExecutionCompletedEvent({
@@ -77,6 +115,24 @@ describe("stream events", () => {
       toolName: "echo",
       output: "hello",
       isError: false
+    });
+  });
+
+  it("preserves explicit tool completed fields with falsy values", () => {
+    expect(
+      createToolExecutionCompletedEvent({
+        toolName: "echo",
+        output: "",
+        metadata: {},
+        toolUseId: ""
+      })
+    ).toEqual({
+      type: "tool_execution_completed",
+      toolName: "echo",
+      output: "",
+      isError: false,
+      metadata: {},
+      toolUseId: ""
     });
   });
 
