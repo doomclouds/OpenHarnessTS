@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  createAssistantTextDeltaEvent as createAssistantTextDeltaEventFromRoot
+} from "../src/index.js";
+import type { StreamEvent as RootStreamEvent } from "../src/index.js";
 import { createAssistantMessage, createTextBlock } from "../src/messages/index.js";
 import {
   createAssistantTextDeltaEvent,
@@ -150,6 +154,18 @@ describe("stream events", () => {
       type: "error",
       message: "Nope",
       recoverable: false
+    });
+  });
+});
+
+describe("stream event root exports", () => {
+  it("exports stream event helpers from the package root", () => {
+    const event: RootStreamEvent =
+      createAssistantTextDeltaEventFromRoot("hello");
+
+    expect(event).toEqual({
+      type: "assistant_text_delta",
+      text: "hello"
     });
   });
 });

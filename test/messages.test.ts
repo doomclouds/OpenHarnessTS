@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAssistantMessage as createAssistantMessageFromRoot,
+  createTextBlock as createTextBlockFromRoot,
+  createUserMessageFromText as createUserMessageFromTextFromRoot
+} from "../src/index.js";
+import type {
+  ConversationMessage as RootConversationMessage,
+  MessageRole as RootMessageRole
+} from "../src/index.js";
+import {
   createAssistantMessage,
   createTextBlock,
   createToolResultBlock,
@@ -228,5 +237,21 @@ describe("conversation messages", () => {
     expect(isAssistantMessage(user)).toBe(false);
     expect(isAssistantMessage(assistant)).toBe(true);
     expect(isUserMessage(assistant)).toBe(false);
+  });
+});
+
+describe("message root exports", () => {
+  it("exports message helpers from the package root", () => {
+    const message: RootConversationMessage =
+      createUserMessageFromTextFromRoot("hello");
+    const role: RootMessageRole = message.role;
+
+    expect(role).toBe("user");
+    expect(
+      createAssistantMessageFromRoot([createTextBlockFromRoot("hi")])
+    ).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }]
+    });
   });
 });
