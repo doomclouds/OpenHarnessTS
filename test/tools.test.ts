@@ -7,10 +7,21 @@ import {
   normalizeToolResult,
   ToolRegistry
 } from "../src/tools/index.js";
+import {
+  createToolResult as createToolResultFromRoot,
+  createToolResultBlockFromToolResult as createToolResultBlockFromRoot,
+  executeRegisteredTool as executeRegisteredToolFromRoot,
+  ToolRegistry as ToolRegistryFromRoot
+} from "../src/index.js";
 import type {
   ToolDefinition,
   ToolExecutionContext
 } from "../src/tools/index.js";
+import type {
+  ToolDefinition as RootToolDefinition,
+  ToolExecutionContext as RootToolExecutionContext,
+  ToolResult as RootToolResult
+} from "../src/index.js";
 
 describe("tool results", () => {
   it("creates a successful tool result with defaults", () => {
@@ -568,6 +579,47 @@ describe("registered tool execution", () => {
       metadata: {
         reason: "test"
       }
+    });
+  });
+});
+
+describe("tool root exports", () => {
+  it("exports the tool protocol from the package root", async () => {
+    const registry = new ToolRegistryFromRoot();
+    const tool: RootToolDefinition = {
+      name: "echo",
+      description: "Echoes input.",
+      execute(input) {
+        return createToolResultFromRoot({ output: String(input) });
+      }
+    };
+    const context: RootToolExecutionContext = {
+      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      metadata: {}
+    };
+
+    registry.register(tool);
+
+    const result: RootToolResult = await executeRegisteredToolFromRoot(
+      registry,
+      {
+        toolUseId: "toolu_root",
+        toolName: "echo",
+        input: "hello"
+      },
+      context
+    );
+    const block = createToolResultBlockFromRoot({
+      toolUseId: "toolu_root",
+      result
+    });
+
+    expect(block).toEqual({
+      type: "tool_result",
+      toolUseId: "toolu_root",
+      content: "hello",
+      isError: false,
+      metadata: {}
     });
   });
 });
