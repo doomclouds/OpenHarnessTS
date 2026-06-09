@@ -5,6 +5,10 @@ const DEFAULT_INPUT_SCHEMA: JsonSchema = {
   properties: {}
 };
 
+function cloneJsonSchema(schema: JsonSchema): JsonSchema {
+  return structuredClone(schema) as JsonSchema;
+}
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolDefinition>();
 
@@ -19,7 +23,12 @@ export class ToolRegistry {
       throw new Error(`Tool '${name}' is already registered.`);
     }
 
-    this.tools.set(name, { ...tool, name });
+    const registeredTool =
+      tool.inputSchema === undefined
+        ? { ...tool, name }
+        : { ...tool, name, inputSchema: cloneJsonSchema(tool.inputSchema) };
+
+    this.tools.set(name, registeredTool);
   }
 
   public getTool(name: string): ToolDefinition | undefined {
@@ -38,7 +47,7 @@ export class ToolRegistry {
     return this.listTools().map((tool) => ({
       name: tool.name,
       description: tool.description,
-      input_schema: tool.inputSchema ?? DEFAULT_INPUT_SCHEMA
+      input_schema: cloneJsonSchema(tool.inputSchema ?? DEFAULT_INPUT_SCHEMA)
     }));
   }
 }

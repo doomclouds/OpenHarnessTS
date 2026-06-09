@@ -219,4 +219,55 @@ describe("tool registry", () => {
       }
     ]);
   });
+
+  it("does not share default API schema objects between exports", () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "no-schema",
+      description: "No schema tool.",
+      execute() {
+        return createToolResult({ output: "done" });
+      }
+    });
+
+    const firstSchema = registry.toApiSchema()[0]?.input_schema as Record<
+      string,
+      unknown
+    >;
+    firstSchema.properties = { mutated: true };
+
+    expect(registry.toApiSchema()[0]?.input_schema).toEqual({
+      type: "object",
+      properties: {}
+    });
+  });
+
+  it("isolates registered input schemas from external mutation", () => {
+    const registry = new ToolRegistry();
+    const properties: Record<string, unknown> = {
+      value: { type: "string" }
+    };
+    const inputSchema: Record<string, unknown> = {
+      type: "object",
+      properties
+    };
+
+    registry.register({
+      name: "echo",
+      description: "Echoes input.",
+      inputSchema,
+      execute(input) {
+        return createToolResult({ output: JSON.stringify(input) });
+      }
+    });
+
+    properties.value = { type: "number" };
+
+    expect(registry.toApiSchema()[0]?.input_schema).toEqual({
+      type: "object",
+      properties: {
+        value: { type: "string" }
+      }
+    });
+  });
 });
