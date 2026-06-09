@@ -1,6 +1,7 @@
 OpenHarness/
 .codegraph/
 graphify-out/
+.worktrees/
 
 node_modules/
 dist/
