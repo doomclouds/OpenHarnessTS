@@ -77,4 +77,18 @@ describe("tool results", () => {
       metadata: {}
     });
   });
+
+  it("creates an error result with shallow-copied metadata", () => {
+    const metadata = { code: "missing-tool" };
+    const result = createToolErrorResult("Unknown tool: missing", metadata);
+
+    metadata.code = "changed";
+
+    expect(result).toEqual({
+      output: "Unknown tool: missing",
+      isError: true,
+      metadata: { code: "missing-tool" }
+    });
+    expect(result.metadata).not.toBe(metadata);
+  });
 });
