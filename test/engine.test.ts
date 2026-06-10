@@ -126,9 +126,9 @@ describe("runQuery plain text loop", () => {
         {
           type: "retry",
           message: "temporary",
-          attempt: 1,
+          attempt: 0,
           maxAttempts: 2,
-          delaySeconds: 0.3
+          delaySeconds: 0.25
         },
         {
           type: "message_complete",

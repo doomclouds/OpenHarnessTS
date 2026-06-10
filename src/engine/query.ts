@@ -41,7 +41,7 @@ export async function* runQuery(
 
         if (event.type === "retry") {
           yield createStatusEvent(
-            `Request failed; retrying in ${event.delaySeconds}s (attempt ${event.attempt} of ${event.maxAttempts}): ${event.message}`
+            `Request failed; retrying in ${event.delaySeconds.toFixed(1)}s (attempt ${event.attempt + 1} of ${event.maxAttempts}): ${event.message}`
           );
           continue;
         }
