@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAssistantMessage,
   createTextBlock,
+  createToolResult,
   createToolUseBlock,
   createUserMessageFromText,
   getMessageText,
+  isToolResultBlock,
   PermissionChecker,
   runQuery,
   ToolRegistry
@@ -14,6 +16,8 @@ import type {
   ApiMessageRequest,
   ApiStreamEvent,
   ConversationMessage,
+  PermissionMode,
+  ToolDefinition,
   StreamEvent
 } from "../src/index.js";
 
@@ -45,22 +49,36 @@ class ScriptedApiClient implements ApiClient {
   }
 }
 
-async function collectPlainEvents(
+async function collectEvents(
   client: ApiClient,
-  messages: ConversationMessage[]
+  messages: ConversationMessage[],
+  tools: readonly ToolDefinition[] = [],
+  options: {
+    readonly mode?: PermissionMode;
+    readonly maxTurns?: number;
+    readonly toolMetadata?: Readonly<Record<string, unknown>>;
+  } = {}
 ): Promise<readonly StreamEvent[]> {
+  const registry = new ToolRegistry();
+  for (const tool of tools) {
+    registry.register(tool);
+  }
+
   const events: StreamEvent[] = [];
 
   for await (const event of runQuery(
     {
       apiClient: client,
-      toolRegistry: new ToolRegistry(),
-      permissionChecker: new PermissionChecker({ mode: "full_auto" }),
+      toolRegistry: registry,
+      permissionChecker: new PermissionChecker({ mode: options.mode ?? "full_auto" }),
       cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
       model: "mock-model",
       systemPrompt: "You are a test assistant.",
       maxTokens: 128,
-      maxTurns: 5
+      maxTurns: options.maxTurns ?? 5,
+      toolMetadata: options.toolMetadata ?? {
+        session: "test-session"
+      }
     },
     messages
   )) {
@@ -68,6 +86,52 @@ async function collectPlainEvents(
   }
 
   return events;
+}
+
+function textComplete(text: string): ApiStreamEvent {
+  return {
+    type: "message_complete",
+    message: createAssistantMessage([createTextBlock(text)])
+  };
+}
+
+function assistantToolUse(args: {
+  readonly id: string;
+  readonly name: string;
+  readonly input?: Readonly<Record<string, unknown>>;
+}): ApiStreamEvent {
+  const toolUseArgs =
+    args.input === undefined
+      ? {
+          id: args.id,
+          name: args.name
+        }
+      : {
+          id: args.id,
+          name: args.name,
+          input: args.input
+        };
+
+  return {
+    type: "message_complete",
+    message: createAssistantMessage([
+      createToolUseBlock(toolUseArgs)
+    ])
+  };
+}
+
+function getToolResultMessage(
+  messages: readonly ConversationMessage[]
+): ConversationMessage {
+  const message = messages.find((candidate) =>
+    candidate.content.some(isToolResultBlock)
+  );
+
+  if (message === undefined) {
+    throw new Error("Expected a tool result message.");
+  }
+
+  return message;
 }
 
 describe("runQuery plain text loop", () => {
@@ -90,7 +154,7 @@ describe("runQuery plain text loop", () => {
     ]);
     const messages = [createUserMessageFromText("say hello")];
 
-    const events = await collectPlainEvents(client, messages);
+    const events = await collectEvents(client, messages);
 
     expect(client.requests).toHaveLength(1);
     expect(client.requests[0]).toMatchObject({
@@ -138,7 +202,7 @@ describe("runQuery plain text loop", () => {
     ]);
     const messages = [createUserMessageFromText("say ready")];
 
-    const events = await collectPlainEvents(client, messages);
+    const events = await collectEvents(client, messages);
 
     expect(events.map((event) => event.type)).toEqual([
       "status",
@@ -152,39 +216,237 @@ describe("runQuery plain text loop", () => {
     expect(getMessageText(messages[1] as ConversationMessage)).toBe("ready");
   });
 
-  it("emits turn completion before the placeholder error when tool uses are present", async () => {
+});
+
+describe("runQuery tool-call loop", () => {
+  it("executes a read-only tool, appends tool results, and continues to the final answer", async () => {
+    const execute = vi.fn((input: unknown) =>
+      createToolResult({
+        output: `echo:${(input as { readonly text: string }).text}`
+      })
+    );
+    const echoTool: ToolDefinition = {
+      name: "echo",
+      description: "Echoes text.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          text: {
+            type: "string"
+          }
+        },
+        required: ["text"]
+      },
+      validateInput(input) {
+        if (
+          typeof input === "object" &&
+          input !== null &&
+          typeof (input as { readonly text?: unknown }).text === "string"
+        ) {
+          return {
+            ok: true,
+            value: {
+              text: (input as { readonly text: string }).text
+            }
+          };
+        }
+
+        return {
+          ok: false,
+          error: "text is required"
+        };
+      },
+      isReadOnly: () => true,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_echo",
+          name: "echo",
+          input: { text: "hello" }
+        })
+      ],
+      [textComplete("final answer")]
+    ]);
+    const messages = [createUserMessageFromText("echo hello")];
+
+    const events = await collectEvents(client, messages, [echoTool], {
+      toolMetadata: {
+        requestId: "req-123"
+      }
+    });
+
+    expect(client.requests).toHaveLength(2);
+    expect(client.requests[0]?.tools).toEqual([
+      {
+        name: "echo",
+        description: "Echoes text.",
+        input_schema: {
+          type: "object",
+          properties: {
+            text: {
+              type: "string"
+            }
+          },
+          required: ["text"]
+        }
+      }
+    ]);
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+    expect(client.requests[1]?.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user"
+    ]);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(events[1]).toEqual({
+      type: "tool_execution_started",
+      toolName: "echo",
+      toolInput: { text: "hello" },
+      toolUseId: "toolu_echo"
+    });
+    expect(events[2]).toEqual({
+      type: "tool_execution_completed",
+      toolName: "echo",
+      output: "echo:hello",
+      isError: false,
+      metadata: {},
+      toolUseId: "toolu_echo"
+    });
+    expect(execute).toHaveBeenCalledWith(
+      { text: "hello" },
+      {
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+        metadata: {
+          requestId: "req-123"
+        }
+      }
+    );
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant"
+    ]);
+    expect(getToolResultMessage(messages).content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_echo",
+        content: "echo:hello",
+        isError: false,
+        metadata: {}
+      }
+    ]);
+    expect(getMessageText(messages[3] as ConversationMessage)).toBe(
+      "final answer"
+    );
+  });
+
+  it("executes multiple read-only tools in order and appends one tool-result message", async () => {
+    const firstExecute = vi.fn(() => createToolResult({ output: "first-output" }));
+    const secondExecute = vi.fn(() =>
+      createToolResult({
+        output: "second-output",
+        metadata: {
+          source: "second"
+        }
+      })
+    );
+    const firstTool: ToolDefinition = {
+      name: "first",
+      description: "First read-only tool.",
+      isReadOnly: () => true,
+      execute: firstExecute
+    };
+    const secondTool: ToolDefinition = {
+      name: "second",
+      description: "Second read-only tool.",
+      isReadOnly: () => true,
+      execute: secondExecute
+    };
     const client = new ScriptedApiClient([
       [
         {
           type: "message_complete",
           message: createAssistantMessage([
+            createToolUseBlock({ id: "toolu_first", name: "first" }),
             createToolUseBlock({
-              id: "toolu_placeholder",
-              name: "read",
-              input: { path: "README.md" }
+              id: "toolu_second",
+              name: "second",
+              input: { value: 2 }
             })
           ])
         }
-      ]
+      ],
+      [textComplete("both done")]
     ]);
-    const messages = [createUserMessageFromText("read README")];
+    const messages = [createUserMessageFromText("run both")];
 
-    const events = await collectPlainEvents(client, messages);
+    const events = await collectEvents(client, messages, [firstTool, secondTool]);
 
     expect(events.map((event) => event.type)).toEqual([
       "assistant_turn_complete",
-      "error"
+      "tool_execution_started",
+      "tool_execution_completed",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
     ]);
-    expect(events[0]).toEqual({
-      type: "assistant_turn_complete",
-      message: messages[1]
+    expect(events[1]).toMatchObject({
+      toolName: "first",
+      toolUseId: "toolu_first"
     });
-    expect(events[1]).toEqual({
-      type: "error",
-      message: "Tool execution is not implemented yet",
-      recoverable: false
+    expect(events[2]).toMatchObject({
+      toolName: "first",
+      output: "first-output",
+      metadata: {},
+      toolUseId: "toolu_first"
     });
-    expect(messages).toHaveLength(2);
-    expect(messages[1]?.role).toBe("assistant");
+    expect(events[3]).toMatchObject({
+      toolName: "second",
+      toolInput: { value: 2 },
+      toolUseId: "toolu_second"
+    });
+    expect(events[4]).toMatchObject({
+      toolName: "second",
+      output: "second-output",
+      metadata: {
+        source: "second"
+      },
+      toolUseId: "toolu_second"
+    });
+    expect(client.requests).toHaveLength(2);
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+    expect(getToolResultMessage(messages).content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_first",
+        content: "first-output",
+        isError: false,
+        metadata: {}
+      },
+      {
+        type: "tool_result",
+        toolUseId: "toolu_second",
+        content: "second-output",
+        isError: false,
+        metadata: {
+          source: "second"
+        }
+      }
+    ]);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant"
+    ]);
   });
 });

@@ -1,16 +1,27 @@
 import type { ApiMessageCompleteEvent } from "../api/index.js";
 import {
+  createUserMessageFromContent,
   getToolUses,
   isEffectivelyEmpty,
-  type ConversationMessage
+  type ConversationMessage,
+  type ToolResultBlock,
+  type ToolUseBlock
 } from "../messages/index.js";
 import {
   createAssistantTextDeltaEvent,
   createAssistantTurnCompleteEvent,
   createErrorEvent,
   createStatusEvent,
+  createToolExecutionCompletedEvent,
+  createToolExecutionStartedEvent,
   type StreamEvent
 } from "../stream-events/index.js";
+import {
+  createToolErrorResult,
+  createToolResultBlockFromToolResult,
+  normalizeToolResult,
+  type ToolResult
+} from "../tools/index.js";
 import type { QueryContext } from "./context.js";
 
 const DEFAULT_MAX_TURNS = 200;
@@ -87,11 +98,31 @@ export async function* runQuery(
       ...(finalEvent.usage !== undefined ? { usage: finalEvent.usage } : {})
     });
 
-    if (getToolUses(assistantMessage).length > 0) {
-      yield createErrorEvent("Tool execution is not implemented yet", {
-        recoverable: false
-      });
-      return;
+    const toolUses = getToolUses(assistantMessage);
+    if (toolUses.length > 0) {
+      const toolResults: ToolResultBlock[] = [];
+
+      for (const toolUse of toolUses) {
+        yield createToolExecutionStartedEvent({
+          toolName: toolUse.name,
+          toolInput: toolUse.input,
+          toolUseId: toolUse.id
+        });
+
+        const toolResult = await executeToolUse(context, toolUse);
+        toolResults.push(toolResult);
+
+        yield createToolExecutionCompletedEvent({
+          toolName: toolUse.name,
+          output: toolResult.content,
+          isError: toolResult.isError,
+          metadata: toolResult.metadata,
+          toolUseId: toolUse.id
+        });
+      }
+
+      messages.push(createUserMessageFromContent(toolResults));
+      continue;
     }
 
     return;
@@ -104,4 +135,93 @@ export async function* runQuery(
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function executeToolUse(
+  context: QueryContext,
+  toolUse: ToolUseBlock
+): Promise<ToolResultBlock> {
+  const tool = context.toolRegistry.getTool(toolUse.name);
+
+  if (tool === undefined) {
+    return createErrorToolResultBlock(
+      toolUse.id,
+      `Unknown tool: ${toolUse.name}`
+    );
+  }
+
+  let input: unknown = toolUse.input;
+
+  if (tool.validateInput !== undefined) {
+    try {
+      const validation = tool.validateInput(toolUse.input);
+
+      if (!validation.ok) {
+        return createErrorToolResultBlock(
+          toolUse.id,
+          `Invalid input for ${tool.name}: ${validation.error}`
+        );
+      }
+
+      input = validation.value;
+    } catch (error) {
+      return createErrorToolResultBlock(
+        toolUse.id,
+        `Invalid input for ${tool.name}: ${getErrorMessage(error)}`
+      );
+    }
+  }
+
+  const decision = context.permissionChecker.evaluate({
+    toolName: tool.name,
+    isReadOnly: tool.isReadOnly?.(input) ?? false,
+    ...extractPermissionPath(input)
+  });
+
+  if (!decision.allowed) {
+    return createErrorToolResultBlock(toolUse.id, decision.reason);
+  }
+
+  let result: ToolResult;
+  try {
+    result = normalizeToolResult(
+      await tool.execute(input, {
+        cwd: context.cwd,
+        ...(context.signal !== undefined ? { signal: context.signal } : {}),
+        metadata: context.toolMetadata ?? {}
+      })
+    );
+  } catch (error) {
+    result = createToolErrorResult(
+      `Tool ${tool.name} failed: ${getErrorMessage(error)}`
+    );
+  }
+
+  return createToolResultBlockFromToolResult({
+    toolUseId: toolUse.id,
+    result
+  });
+}
+
+function createErrorToolResultBlock(
+  toolUseId: string,
+  output: string
+): ToolResultBlock {
+  return createToolResultBlockFromToolResult({
+    toolUseId,
+    result: createToolErrorResult(output)
+  });
+}
+
+function extractPermissionPath(
+  input: unknown
+): { readonly filePath?: string } {
+  if (typeof input !== "object" || input === null) {
+    return {};
+  }
+
+  const record = input as Readonly<Record<string, unknown>>;
+  const filePath = record.filePath ?? record.path;
+
+  return typeof filePath === "string" ? { filePath } : {};
 }
