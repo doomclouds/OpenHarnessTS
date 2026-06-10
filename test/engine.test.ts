@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createAssistantMessage,
   createTextBlock,
+  createToolUseBlock,
   createUserMessageFromText,
   getMessageText,
   PermissionChecker,
@@ -124,10 +125,10 @@ describe("runQuery plain text loop", () => {
       [
         {
           type: "retry",
-          message: "rate limited",
+          message: "temporary",
           attempt: 1,
-          maxAttempts: 3,
-          delaySeconds: 0.5
+          maxAttempts: 2,
+          delaySeconds: 0.3
         },
         {
           type: "message_complete",
@@ -145,9 +146,45 @@ describe("runQuery plain text loop", () => {
     ]);
     expect(events[0]).toEqual({
       type: "status",
-      message: "rate limited"
+      message: "Request failed; retrying in 0.3s (attempt 1 of 2): temporary"
     });
     expect(messages).toHaveLength(2);
     expect(getMessageText(messages[1] as ConversationMessage)).toBe("ready");
+  });
+
+  it("emits turn completion before the placeholder error when tool uses are present", async () => {
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([
+            createToolUseBlock({
+              id: "toolu_placeholder",
+              name: "read",
+              input: { path: "README.md" }
+            })
+          ])
+        }
+      ]
+    ]);
+    const messages = [createUserMessageFromText("read README")];
+
+    const events = await collectPlainEvents(client, messages);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "error"
+    ]);
+    expect(events[0]).toEqual({
+      type: "assistant_turn_complete",
+      message: messages[1]
+    });
+    expect(events[1]).toEqual({
+      type: "error",
+      message: "Tool execution is not implemented yet",
+      recoverable: false
+    });
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.role).toBe("assistant");
   });
 });

@@ -40,7 +40,9 @@ export async function* runQuery(
         }
 
         if (event.type === "retry") {
-          yield createStatusEvent(event.message);
+          yield createStatusEvent(
+            `Request failed; retrying in ${event.delaySeconds}s (attempt ${event.attempt} of ${event.maxAttempts}): ${event.message}`
+          );
           continue;
         }
 
@@ -80,6 +82,11 @@ export async function* runQuery(
 
     messages.push(assistantMessage);
 
+    yield createAssistantTurnCompleteEvent({
+      message: assistantMessage,
+      ...(finalEvent.usage !== undefined ? { usage: finalEvent.usage } : {})
+    });
+
     if (getToolUses(assistantMessage).length > 0) {
       yield createErrorEvent("Tool execution is not implemented yet", {
         recoverable: false
@@ -87,10 +94,6 @@ export async function* runQuery(
       return;
     }
 
-    yield createAssistantTurnCompleteEvent({
-      message: assistantMessage,
-      ...(finalEvent.usage !== undefined ? { usage: finalEvent.usage } : {})
-    });
     return;
   }
 
