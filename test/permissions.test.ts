@@ -176,6 +176,48 @@ describe("sensitive paths", () => {
     expect(decision.reason).toContain("*/.aws/credentials");
   });
 
+  it("blocks relative SSH key paths in full-auto mode", () => {
+    const checker = new PermissionChecker({ mode: "full_auto" });
+
+    const decision = checker.evaluate({
+      toolName: "bash",
+      isReadOnly: false,
+      filePath: ".ssh/id_rsa"
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresConfirmation).toBe(false);
+    expect(decision.reason).toContain("*/.ssh/*");
+  });
+
+  it("blocks relative AWS credential paths for read-only tools", () => {
+    const checker = new PermissionChecker({ mode: "default" });
+
+    const decision = checker.evaluate({
+      toolName: "read_file",
+      isReadOnly: true,
+      filePath: ".aws/credentials"
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresConfirmation).toBe(false);
+    expect(decision.reason).toContain("*/.aws/credentials");
+  });
+
+  it("blocks Windows-style AWS credential paths with mixed-case segments", () => {
+    const checker = new PermissionChecker({ mode: "full_auto" });
+
+    const decision = checker.evaluate({
+      toolName: "bash",
+      isReadOnly: false,
+      filePath: "C:\\Users\\me\\.AWS\\credentials"
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresConfirmation).toBe(false);
+    expect(decision.reason).toContain("*/.aws/credentials");
+  });
+
   it("leaves non-sensitive paths to normal mode behavior", () => {
     const checker = new PermissionChecker({ mode: "default" });
 
@@ -251,5 +293,9 @@ describe("sensitive paths", () => {
       expect(decision.requiresConfirmation).toBe(false);
       expect(decision.reason).toContain(pattern);
     }
+  });
+
+  it("exports sensitive path patterns as an immutable runtime list", () => {
+    expect(Object.isFrozen(SENSITIVE_PATH_PATTERNS)).toBe(true);
   });
 });

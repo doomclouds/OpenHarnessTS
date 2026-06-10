@@ -3,7 +3,7 @@ import {
   type PermissionMode
 } from "./modes.js";
 
-export const SENSITIVE_PATH_PATTERNS = [
+export const SENSITIVE_PATH_PATTERNS = Object.freeze([
   "*/.ssh/*",
   "*/.aws/credentials",
   "*/.aws/config",
@@ -14,7 +14,7 @@ export const SENSITIVE_PATH_PATTERNS = [
   "*/.kube/config",
   "*/.openharness/credentials.json",
   "*/.openharness/copilot_auth.json"
-] as const;
+] as const);
 
 export interface PermissionDecision {
   readonly allowed: boolean;
@@ -88,7 +88,15 @@ function findSensitivePathPattern(filePath: string | undefined): string | undefi
   }
 
   const normalizedPath = filePath.replace(/\\/gu, "/").replace(/\/+$/u, "");
-  const candidates = [normalizedPath, `${normalizedPath}/`];
+  const rootedNormalizedPath = normalizedPath.startsWith("/")
+    ? normalizedPath
+    : `/${normalizedPath}`;
+  const candidates = [
+    normalizedPath,
+    `${normalizedPath}/`,
+    rootedNormalizedPath,
+    `${rootedNormalizedPath}/`
+  ];
 
   return SENSITIVE_PATH_PATTERNS.find((pattern) => {
     const patternRegExp = globToRegExp(pattern);
@@ -98,7 +106,7 @@ function findSensitivePathPattern(filePath: string | undefined): string | undefi
 
 function globToRegExp(pattern: string): RegExp {
   const escapedSegments = pattern.split("*").map(escapeRegExp);
-  return new RegExp(`^${escapedSegments.join(".*")}$`, "u");
+  return new RegExp(`^${escapedSegments.join(".*")}$`, "iu");
 }
 
 function escapeRegExp(value: string): string {
