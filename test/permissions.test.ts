@@ -3,6 +3,16 @@ import {
   PermissionChecker,
   SENSITIVE_PATH_PATTERNS
 } from "../src/permissions/index.js";
+import {
+  PermissionChecker as RootPermissionChecker,
+  SENSITIVE_PATH_PATTERNS as ROOT_SENSITIVE_PATH_PATTERNS
+} from "../src/index.js";
+import type {
+  PermissionCheckerOptions as RootPermissionCheckerOptions,
+  PermissionDecision as RootPermissionDecision,
+  PermissionEvaluation as RootPermissionEvaluation,
+  PermissionMode as RootPermissionMode
+} from "../src/index.js";
 
 describe("permission modes", () => {
   it("allows read-only tools in default mode", () => {
@@ -297,5 +307,23 @@ describe("sensitive paths", () => {
 
   it("exports sensitive path patterns as an immutable runtime list", () => {
     expect(Object.isFrozen(SENSITIVE_PATH_PATTERNS)).toBe(true);
+  });
+});
+
+describe("permission root exports", () => {
+  it("exports the permission checker public surface from the package root", () => {
+    const mode: RootPermissionMode = "default";
+    const options: RootPermissionCheckerOptions = { mode };
+    const evaluation: RootPermissionEvaluation = {
+      toolName: "write_file",
+      isReadOnly: false
+    };
+    const checker = new RootPermissionChecker(options);
+
+    const decision: RootPermissionDecision = checker.evaluate(evaluation);
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.requiresConfirmation).toBe(true);
+    expect(ROOT_SENSITIVE_PATH_PATTERNS).toEqual(SENSITIVE_PATH_PATTERNS);
   });
 });
