@@ -3,6 +3,19 @@ import {
   type PermissionMode
 } from "./modes.js";
 
+export const SENSITIVE_PATH_PATTERNS = [
+  "*/.ssh/*",
+  "*/.aws/credentials",
+  "*/.aws/config",
+  "*/.config/gcloud/*",
+  "*/.azure/*",
+  "*/.gnupg/*",
+  "*/.docker/config.json",
+  "*/.kube/config",
+  "*/.openharness/credentials.json",
+  "*/.openharness/copilot_auth.json"
+] as const;
+
 export interface PermissionDecision {
   readonly allowed: boolean;
   readonly requiresConfirmation: boolean;
@@ -27,6 +40,15 @@ export class PermissionChecker {
   }
 
   public evaluate(input: PermissionEvaluation): PermissionDecision {
+    const sensitivePattern = findSensitivePathPattern(input.filePath);
+    if (sensitivePattern !== undefined) {
+      return {
+        allowed: false,
+        requiresConfirmation: false,
+        reason: `Blocked sensitive credential path matching ${sensitivePattern}`
+      };
+    }
+
     if (this.mode === "full_auto") {
       return allow("Auto mode allows all tools");
     }
@@ -58,4 +80,27 @@ function allow(reason: string): PermissionDecision {
     requiresConfirmation: false,
     reason
   };
+}
+
+function findSensitivePathPattern(filePath: string | undefined): string | undefined {
+  if (filePath === undefined || filePath === "") {
+    return undefined;
+  }
+
+  const normalizedPath = filePath.replace(/\\/gu, "/").replace(/\/+$/u, "");
+  const candidates = [normalizedPath, `${normalizedPath}/`];
+
+  return SENSITIVE_PATH_PATTERNS.find((pattern) => {
+    const patternRegExp = globToRegExp(pattern);
+    return candidates.some((candidate) => patternRegExp.test(candidate));
+  });
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const escapedSegments = pattern.split("*").map(escapeRegExp);
+  return new RegExp(`^${escapedSegments.join(".*")}$`, "u");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[\\^$+?.()|[\]{}]/gu, "\\$&");
 }
