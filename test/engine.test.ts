@@ -449,4 +449,58 @@ describe("runQuery tool-call loop", () => {
       "assistant"
     ]);
   });
+
+  it("turns read-only policy errors into aligned tool results", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const tool: ToolDefinition = {
+      name: "fragile_policy",
+      description: "Throws while computing read-only policy.",
+      isReadOnly() {
+        throw new Error("policy exploded");
+      },
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_fragile_policy",
+          name: "fragile_policy",
+          input: { target: "safe.txt" }
+        })
+      ],
+      [textComplete("policy handled")]
+    ]);
+    const messages = [createUserMessageFromText("run fragile policy")];
+
+    const events = await collectEvents(client, messages, [tool]);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(client.requests).toHaveLength(2);
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(events[2]).toMatchObject({
+      toolName: "fragile_policy",
+      output: "Invalid read-only policy for fragile_policy: policy exploded",
+      isError: true,
+      metadata: {},
+      toolUseId: "toolu_fragile_policy"
+    });
+    expect(getToolResultMessage(messages).content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_fragile_policy",
+        content: "Invalid read-only policy for fragile_policy: policy exploded",
+        isError: true,
+        metadata: {}
+      }
+    ]);
+    expect(getMessageText(messages[3] as ConversationMessage)).toBe(
+      "policy handled"
+    );
+  });
 });

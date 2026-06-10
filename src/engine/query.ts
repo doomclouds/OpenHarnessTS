@@ -172,9 +172,19 @@ async function executeToolUse(
     }
   }
 
+  let isReadOnly = false;
+  try {
+    isReadOnly = tool.isReadOnly?.(input) ?? false;
+  } catch (error) {
+    return createErrorToolResultBlock(
+      toolUse.id,
+      `Invalid read-only policy for ${tool.name}: ${getErrorMessage(error)}`
+    );
+  }
+
   const decision = context.permissionChecker.evaluate({
     toolName: tool.name,
-    isReadOnly: tool.isReadOnly?.(input) ?? false,
+    isReadOnly,
     ...extractPermissionPath(input)
   });
 
