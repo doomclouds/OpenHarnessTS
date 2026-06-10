@@ -150,11 +150,12 @@ async function executeToolUse(
     );
   }
 
-  let input: unknown = toolUse.input;
+  const rawInput = toolUse.input;
+  let input: unknown = rawInput;
 
   if (tool.validateInput !== undefined) {
     try {
-      const validation = tool.validateInput(toolUse.input);
+      const validation = tool.validateInput(rawInput);
 
       if (!validation.ok) {
         return createErrorToolResultBlock(
@@ -185,7 +186,7 @@ async function executeToolUse(
   const decision = context.permissionChecker.evaluate({
     toolName: tool.name,
     isReadOnly,
-    ...extractPermissionPath(input)
+    ...extractPermissionPath(input, rawInput)
   });
 
   if (!decision.allowed) {
@@ -224,14 +225,20 @@ function createErrorToolResultBlock(
 }
 
 function extractPermissionPath(
-  input: unknown
+  ...inputs: readonly unknown[]
 ): { readonly filePath?: string } {
-  if (typeof input !== "object" || input === null) {
-    return {};
+  for (const input of inputs) {
+    if (typeof input !== "object" || input === null) {
+      continue;
+    }
+
+    const record = input as Readonly<Record<string, unknown>>;
+    const filePath = record.filePath ?? record.path;
+
+    if (typeof filePath === "string") {
+      return { filePath };
+    }
   }
 
-  const record = input as Readonly<Record<string, unknown>>;
-  const filePath = record.filePath ?? record.path;
-
-  return typeof filePath === "string" ? { filePath } : {};
+  return {};
 }

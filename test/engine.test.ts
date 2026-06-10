@@ -56,6 +56,7 @@ async function collectEvents(
   options: {
     readonly mode?: PermissionMode;
     readonly maxTurns?: number;
+    readonly permissionChecker?: PermissionChecker;
     readonly toolMetadata?: Readonly<Record<string, unknown>>;
   } = {}
 ): Promise<readonly StreamEvent[]> {
@@ -70,7 +71,9 @@ async function collectEvents(
     {
       apiClient: client,
       toolRegistry: registry,
-      permissionChecker: new PermissionChecker({ mode: options.mode ?? "full_auto" }),
+      permissionChecker:
+        options.permissionChecker ??
+        new PermissionChecker({ mode: options.mode ?? "full_auto" }),
       cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
       model: "mock-model",
       systemPrompt: "You are a test assistant.",
@@ -690,6 +693,8 @@ describe("runQuery permission integration", () => {
   });
 
   it("fails invalid input before permission evaluation or execution", async () => {
+    const permissionChecker = new PermissionChecker({ mode: "full_auto" });
+    const evaluate = vi.spyOn(permissionChecker, "evaluate");
     const isReadOnly = vi.fn(() => true);
     const execute = vi.fn(() => createToolResult({ output: "should not run" }));
     const tool: ToolDefinition = {
@@ -710,8 +715,9 @@ describe("runQuery permission integration", () => {
     ]);
     const messages = [createUserMessageFromText("validate")];
 
-    await collectEvents(client, messages, [tool], { mode: "full_auto" });
+    await collectEvents(client, messages, [tool], { permissionChecker });
 
+    expect(evaluate).not.toHaveBeenCalled();
     expect(isReadOnly).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
     expect(getToolResultMessage(messages).content[0]).toMatchObject({
@@ -753,6 +759,50 @@ describe("runQuery permission integration", () => {
       ).toContain("sensitive credential path");
     }
   );
+
+  it("checks sensitive paths from raw input when validation returns a normalized value without paths", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const tool: ToolDefinition = {
+      name: "validated_secret_read",
+      description: "Normalizes raw secret path input.",
+      validateInput() {
+        return {
+          ok: true,
+          value: {
+            readOnly: true
+          }
+        };
+      },
+      isReadOnly(input) {
+        return (input as { readonly readOnly: boolean }).readOnly;
+      },
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_raw_secret",
+          name: "validated_secret_read",
+          input: { path: "C:\\Users\\me\\.ssh\\id_rsa" }
+        })
+      ],
+      [textComplete("blocked")]
+    ]);
+    const messages = [createUserMessageFromText("read normalized secret")];
+
+    await collectEvents(client, messages, [tool], { mode: "full_auto" });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_raw_secret",
+      isError: true
+    });
+    expect(
+      (getToolResultMessage(messages).content[0] as { readonly content: string })
+        .content
+    ).toContain("sensitive credential path");
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+  });
 });
 
 describe("runQuery tool failure alignment", () => {
