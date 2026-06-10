@@ -1028,3 +1028,14 @@ describe("runQuery loop control", () => {
     });
   });
 });
+
+describe("engine root exports", () => {
+  it("exports runQuery and provider-neutral API types from the package root", async () => {
+    const client: ApiClient = new ScriptedApiClient([[textComplete("ok")]]);
+    const messages = [createUserMessageFromText("root")];
+
+    const events = await collectEvents(client, messages);
+
+    expect(events.at(-1)?.type).toBe("assistant_turn_complete");
+  });
+});
