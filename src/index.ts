@@ -62,3 +62,13 @@ export type {
   ToolExecutionStartedEvent,
   UsageSnapshot
 } from "./stream-events/index.js";
+export {
+  PermissionChecker,
+  SENSITIVE_PATH_PATTERNS
+} from "./permissions/index.js";
+export type {
+  PermissionCheckerOptions,
+  PermissionDecision,
+  PermissionEvaluation,
+  PermissionMode
+} from "./permissions/index.js";
