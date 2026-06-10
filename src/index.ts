@@ -63,6 +63,21 @@ export type {
   UsageSnapshot
 } from "./stream-events/index.js";
 export {
+  createApiMessageCompleteEvent,
+  createApiRetryEvent,
+  createApiTextDeltaEvent
+} from "./api/index.js";
+export type {
+  ApiClient,
+  ApiMessageCompleteEvent,
+  ApiMessageRequest,
+  ApiRetryEvent,
+  ApiStreamEvent,
+  ApiTextDeltaEvent
+} from "./api/index.js";
+export { runQuery } from "./engine/index.js";
+export type { QueryContext } from "./engine/index.js";
+export {
   PermissionChecker,
   SENSITIVE_PATH_PATTERNS
 } from "./permissions/index.js";
