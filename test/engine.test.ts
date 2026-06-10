@@ -504,3 +504,477 @@ describe("runQuery tool-call loop", () => {
     );
   });
 });
+
+describe("runQuery permission integration", () => {
+  it("denies mutating tools in default mode, emits aligned error events, and feeds the error result back", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const tool: ToolDefinition = {
+      name: "write_file",
+      description: "Writes a file.",
+      isReadOnly: () => false,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_default_denied",
+          name: "write_file",
+          input: { path: "notes.txt" }
+        })
+      ],
+      [textComplete("handled denial")]
+    ]);
+    const messages = [createUserMessageFromText("write file")];
+
+    const events = await collectEvents(client, messages, [tool], {
+      mode: "default"
+    });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "write_file",
+      output:
+        "This mutating tool requires user confirmation in default mode. Approve the prompt when asked.",
+      isError: true,
+      toolUseId: "toolu_default_denied"
+    });
+    expect(getToolResultMessage(messages).content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_default_denied",
+        content:
+          "This mutating tool requires user confirmation in default mode. Approve the prompt when asked.",
+        isError: true,
+        metadata: {}
+      }
+    ]);
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+  });
+
+  it("denies mutating tools in plan mode before execution", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const tool: ToolDefinition = {
+      name: "edit_file",
+      description: "Edits a file.",
+      isReadOnly: () => false,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_plan_denied",
+          name: "edit_file",
+          input: { path: "notes.txt" }
+        })
+      ],
+      [textComplete("handled plan denial")]
+    ]);
+    const messages = [createUserMessageFromText("edit file")];
+
+    await collectEvents(client, messages, [tool], { mode: "plan" });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_plan_denied",
+      content: "Plan mode blocks mutating tools until the user exits plan mode",
+      isError: true
+    });
+  });
+
+  it("executes mutating tools in full-auto mode", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "written" }));
+    const tool: ToolDefinition = {
+      name: "write_file",
+      description: "Writes a file.",
+      isReadOnly: () => false,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_full_auto_write",
+          name: "write_file",
+          input: { path: "notes.txt" }
+        })
+      ],
+      [textComplete("write done")]
+    ]);
+    const messages = [createUserMessageFromText("write file")];
+
+    await collectEvents(client, messages, [tool], { mode: "full_auto" });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_full_auto_write",
+      content: "written",
+      isError: false
+    });
+  });
+
+  it.each(["default", "plan"] as const)(
+    "executes read-only tools in %s mode",
+    async (mode) => {
+      const execute = vi.fn(() => createToolResult({ output: mode }));
+      const tool: ToolDefinition = {
+        name: "read",
+        description: "Reads data.",
+        isReadOnly: () => true,
+        execute
+      };
+      const client = new ScriptedApiClient([
+        [assistantToolUse({ id: `toolu_${mode}`, name: "read", input: {} })],
+        [textComplete("read done")]
+      ]);
+      const messages = [createUserMessageFromText("read")];
+
+      await collectEvents(client, messages, [tool], { mode });
+
+      expect(execute).toHaveBeenCalledOnce();
+      expect(getToolResultMessage(messages).content[0]).toMatchObject({
+        toolUseId: `toolu_${mode}`,
+        content: mode,
+        isError: false
+      });
+    }
+  );
+
+  it("computes read-only status from validated input", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "validated read" }));
+    const tool: ToolDefinition = {
+      name: "mode_sensitive",
+      description: "Uses validated input for read-only policy.",
+      validateInput(input) {
+        return {
+          ok: true,
+          value: {
+            readOnly:
+              typeof input === "object" &&
+              input !== null &&
+              (input as { readonly mode?: unknown }).mode === "read"
+          }
+        };
+      },
+      isReadOnly(input) {
+        return (input as { readonly readOnly: boolean }).readOnly;
+      },
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_validated_read",
+          name: "mode_sensitive",
+          input: { mode: "read" }
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("read")];
+
+    await collectEvents(client, messages, [tool], { mode: "plan" });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith(
+      { readOnly: true },
+      expect.objectContaining({
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+      })
+    );
+  });
+
+  it("fails invalid input before permission evaluation or execution", async () => {
+    const isReadOnly = vi.fn(() => true);
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const tool: ToolDefinition = {
+      name: "validated",
+      description: "Validated tool.",
+      validateInput() {
+        return {
+          ok: false,
+          error: "bad input"
+        };
+      },
+      isReadOnly,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [assistantToolUse({ id: "toolu_invalid", name: "validated", input: {} })],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("validate")];
+
+    await collectEvents(client, messages, [tool], { mode: "full_auto" });
+
+    expect(isReadOnly).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_invalid",
+      content: "Invalid input for validated: bad input",
+      isError: true
+    });
+  });
+
+  it.each([
+    ["filePath", "toolu_file_path", { filePath: "C:\\Users\\me\\.ssh\\id_rsa" }],
+    ["path", "toolu_path", { path: "C:\\Users\\me\\.aws\\credentials" }]
+  ] as const)(
+    "extracts %s input for sensitive path checks even in full-auto mode",
+    async (_field, id, input) => {
+      const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+      const tool: ToolDefinition = {
+        name: "read_secret",
+        description: "Reads secret paths.",
+        isReadOnly: () => true,
+        execute
+      };
+      const client = new ScriptedApiClient([
+        [assistantToolUse({ id, name: "read_secret", input })],
+        [textComplete("blocked")]
+      ]);
+      const messages = [createUserMessageFromText("read secret")];
+
+      await collectEvents(client, messages, [tool], { mode: "full_auto" });
+
+      expect(execute).not.toHaveBeenCalled();
+      expect(getToolResultMessage(messages).content[0]).toMatchObject({
+        toolUseId: id,
+        isError: true
+      });
+      expect(
+        (getToolResultMessage(messages).content[0] as { readonly content: string })
+          .content
+      ).toContain("sensitive credential path");
+    }
+  );
+});
+
+describe("runQuery tool failure alignment", () => {
+  it("preserves tool use ids for unknown tools, invalid inputs, thrown validators, thrown tools, and sibling successes", async () => {
+    const invalidTool: ToolDefinition = {
+      name: "invalid",
+      description: "Invalid input tool.",
+      validateInput() {
+        return {
+          ok: false,
+          error: "bad input"
+        };
+      },
+      execute() {
+        return createToolResult({ output: "should not run" });
+      }
+    };
+    const throwingValidator: ToolDefinition = {
+      name: "throwing_validator",
+      description: "Throws during validation.",
+      validateInput() {
+        throw new Error("validator exploded");
+      },
+      execute() {
+        return createToolResult({ output: "should not run" });
+      }
+    };
+    const throwingTool: ToolDefinition = {
+      name: "throwing_tool",
+      description: "Throws during execution.",
+      isReadOnly: () => true,
+      execute() {
+        throw new Error("tool exploded");
+      }
+    };
+    const successfulTool: ToolDefinition = {
+      name: "successful_tool",
+      description: "Succeeds next to failures.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({ output: "success" });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([
+            createToolUseBlock({ id: "toolu_unknown", name: "missing" }),
+            createToolUseBlock({ id: "toolu_invalid", name: "invalid" }),
+            createToolUseBlock({
+              id: "toolu_throwing_validator",
+              name: "throwing_validator"
+            }),
+            createToolUseBlock({
+              id: "toolu_throwing_tool",
+              name: "throwing_tool"
+            }),
+            createToolUseBlock({
+              id: "toolu_successful",
+              name: "successful_tool"
+            })
+          ])
+        }
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("fail tools")];
+
+    await collectEvents(
+      client,
+      messages,
+      [invalidTool, throwingValidator, throwingTool, successfulTool],
+      { mode: "full_auto" }
+    );
+
+    expect(getToolResultMessage(messages).content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_unknown",
+        content: "Unknown tool: missing",
+        isError: true,
+        metadata: {}
+      },
+      {
+        type: "tool_result",
+        toolUseId: "toolu_invalid",
+        content: "Invalid input for invalid: bad input",
+        isError: true,
+        metadata: {}
+      },
+      {
+        type: "tool_result",
+        toolUseId: "toolu_throwing_validator",
+        content: "Invalid input for throwing_validator: validator exploded",
+        isError: true,
+        metadata: {}
+      },
+      {
+        type: "tool_result",
+        toolUseId: "toolu_throwing_tool",
+        content: "Tool throwing_tool failed: tool exploded",
+        isError: true,
+        metadata: {}
+      },
+      {
+        type: "tool_result",
+        toolUseId: "toolu_successful",
+        content: "success",
+        isError: false,
+        metadata: {}
+      }
+    ]);
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+  });
+});
+
+describe("runQuery loop control", () => {
+  it("emits an unrecoverable error and does not append empty assistant messages", async () => {
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([createTextBlock("   ")])
+        }
+      ]
+    ]);
+    const messages = [createUserMessageFromText("empty")];
+
+    const events = await collectEvents(client, messages);
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        message:
+          "Model returned an empty assistant message. The turn was ignored to keep the session healthy.",
+        recoverable: false
+      }
+    ]);
+    expect(messages).toEqual([createUserMessageFromText("empty")]);
+  });
+
+  it("emits an unrecoverable error when the provider stream has no final message", async () => {
+    const client = new ScriptedApiClient([[{ type: "text_delta", text: "orphan" }]]);
+    const messages = [createUserMessageFromText("missing final")];
+
+    const events = await collectEvents(client, messages);
+
+    expect(events).toEqual([
+      {
+        type: "assistant_text_delta",
+        text: "orphan"
+      },
+      {
+        type: "error",
+        message: "Model stream finished without a final message",
+        recoverable: false
+      }
+    ]);
+  });
+
+  it("emits an unrecoverable error when the provider throws", async () => {
+    const client: ApiClient = {
+      async *streamMessage() {
+        throw new Error("network down");
+      }
+    };
+    const messages = [createUserMessageFromText("throw")];
+
+    const events = await collectEvents(client, messages);
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        message: "API error: network down",
+        recoverable: false
+      }
+    ]);
+  });
+
+  it("counts max turns by provider turn rather than tool count", async () => {
+    const tool: ToolDefinition = {
+      name: "read",
+      description: "Reads data.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({ output: "read-output" });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([
+            createToolUseBlock({ id: "toolu_first", name: "read" }),
+            createToolUseBlock({ id: "toolu_second", name: "read" })
+          ])
+        }
+      ],
+      [assistantToolUse({ id: "toolu_third", name: "read", input: {} })]
+    ]);
+    const messages = [createUserMessageFromText("loop")];
+
+    const events = await collectEvents(client, messages, [tool], {
+      maxTurns: 2
+    });
+
+    expect(client.requests).toHaveLength(2);
+    expect(getToolResultMessage(messages).content).toHaveLength(2);
+    expect(messages.at(-1)?.content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_third",
+        content: "read-output",
+        isError: false,
+        metadata: {}
+      }
+    ]);
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "Max turns exceeded: 2",
+      recoverable: false
+    });
+  });
+});
