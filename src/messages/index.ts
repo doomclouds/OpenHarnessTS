@@ -24,4 +24,8 @@ export type {
   ToolResultBlock,
   ToolUseBlock
 } from "./blocks.js";
-export type { ConversationMessage, MessageRole } from "./messages.js";
+export type {
+  AssistantMessageOptions,
+  ConversationMessage,
+  MessageRole
+} from "./messages.js";
