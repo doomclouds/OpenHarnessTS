@@ -1,6 +1,13 @@
 import type { ApiMessageCompleteEvent } from "../api/index.js";
 import {
+  createAggregatedHookResult,
+  type AggregatedHookResult,
+  type HookEvent,
+  type HookPayload
+} from "../hooks/index.js";
+import {
   createUserMessageFromContent,
+  getMessageText,
   getToolUses,
   isEffectivelyEmpty,
   type ConversationMessage,
@@ -31,6 +38,11 @@ export async function* runQuery(
   messages: ConversationMessage[]
 ): AsyncIterable<StreamEvent> {
   const maxTurns = context.maxTurns ?? DEFAULT_MAX_TURNS;
+
+  await executeHook(context, "user_prompt_submit", {
+    event: "user_prompt_submit",
+    prompt: getLatestUserPrompt(messages)
+  });
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     let finalEvent: ApiMessageCompleteEvent | undefined;
@@ -125,6 +137,11 @@ export async function* runQuery(
       continue;
     }
 
+    await executeHook(context, "stop", {
+      event: "stop",
+      stopReason: "tool_uses_empty"
+    });
+
     return;
   }
 
@@ -135,6 +152,40 @@ export async function* runQuery(
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function executeHook(
+  context: QueryContext,
+  event: HookEvent,
+  payload: HookPayload
+): Promise<AggregatedHookResult> {
+  if (context.hookExecutor === undefined) {
+    return createAggregatedHookResult();
+  }
+
+  try {
+    return await context.hookExecutor.execute(payload);
+  } catch (error) {
+    return createAggregatedHookResult([
+      {
+        hookType: "hook_executor",
+        success: false,
+        output: `Hook ${event} failed: ${getErrorMessage(error)}`
+      }
+    ]);
+  }
+}
+
+function getLatestUserPrompt(messages: readonly ConversationMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+
+    if (message?.role === "user") {
+      return getMessageText(message);
+    }
+  }
+
+  return "";
 }
 
 async function executeToolUse(

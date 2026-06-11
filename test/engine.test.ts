@@ -6,6 +6,7 @@ import {
   createToolUseBlock,
   createUserMessageFromText,
   getMessageText,
+  InMemoryHookExecutor,
   isToolResultBlock,
   PermissionChecker,
   runQuery,
@@ -16,6 +17,7 @@ import type {
   ApiMessageRequest,
   ApiStreamEvent,
   ConversationMessage,
+  HookExecutor,
   PermissionMode,
   ToolDefinition,
   StreamEvent
@@ -58,6 +60,7 @@ async function collectEvents(
     readonly maxTurns?: number;
     readonly permissionChecker?: PermissionChecker;
     readonly toolMetadata?: Readonly<Record<string, unknown>>;
+    readonly hookExecutor?: HookExecutor;
   } = {}
 ): Promise<readonly StreamEvent[]> {
   const registry = new ToolRegistry();
@@ -79,6 +82,9 @@ async function collectEvents(
       systemPrompt: "You are a test assistant.",
       maxTokens: 128,
       maxTurns: options.maxTurns ?? 5,
+      ...(options.hookExecutor === undefined
+        ? {}
+        : { hookExecutor: options.hookExecutor }),
       toolMetadata: options.toolMetadata ?? {
         session: "test-session"
       }
@@ -219,6 +225,60 @@ describe("runQuery plain text loop", () => {
     expect(getMessageText(messages[1] as ConversationMessage)).toBe("ready");
   });
 
+});
+
+describe("runQuery hook lifecycle", () => {
+  it("fires user_prompt_submit before the first provider request", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const messages = [createUserMessageFromText("hello hooks")];
+    const hookExecutor = new InMemoryHookExecutor();
+    const calls: string[] = [];
+
+    hookExecutor.register("user_prompt_submit", (payload) => {
+      if (payload.event !== "user_prompt_submit") {
+        throw new Error("Expected user_prompt_submit payload.");
+      }
+
+      calls.push(`hook:${payload.event}:${payload.prompt}`);
+      expect(client.requests).toEqual([]);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(client, messages, [], { hookExecutor });
+
+    expect(calls).toEqual(["hook:user_prompt_submit:hello hooks"]);
+    expect(client.requests).toHaveLength(1);
+  });
+
+  it("fires stop once on a normal no-tool-use completion", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const hookExecutor = new InMemoryHookExecutor();
+    const calls: string[] = [];
+
+    hookExecutor.register("stop", (payload) => {
+      if (payload.event !== "stop") {
+        throw new Error("Expected stop payload.");
+      }
+
+      calls.push(`${payload.event}:${payload.stopReason}`);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("plain")],
+      [],
+      { hookExecutor }
+    );
+
+    expect(calls).toEqual(["stop:tool_uses_empty"]);
+  });
 });
 
 describe("runQuery tool-call loop", () => {
