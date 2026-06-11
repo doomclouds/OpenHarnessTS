@@ -51,7 +51,7 @@ export function buildSystemPrompt(
     collectEnvironmentInfo(
       options.cwd === undefined ? {} : { cwd: options.cwd }
     );
-  const base = DEFAULT_SYSTEM_PROMPT;
+  const base = options.customPrompt ?? DEFAULT_SYSTEM_PROMPT;
 
   return `${base}\n\n${formatEnvironmentSection(environment)}`;
 }

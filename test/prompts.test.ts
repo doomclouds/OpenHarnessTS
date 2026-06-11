@@ -39,3 +39,62 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toContain("OpenHarness TS");
   });
 });
+
+describe("custom system prompts", () => {
+  it("replaces the default base prompt while keeping the environment section", () => {
+    const prompt = buildSystemPrompt({
+      customPrompt: "Custom instructions only.",
+      environment
+    });
+
+    expect(prompt).toContain("Custom instructions only.");
+    expect(prompt).toContain("# Environment");
+    expect(prompt).toContain("- Node executable: C:/Program Files/nodejs/node.exe");
+    expect(prompt).not.toContain("open-source AI coding assistant runtime");
+  });
+});
+
+describe("formatEnvironmentSection", () => {
+  it("formats a git environment with an exact Node-focused section", () => {
+    expect(formatEnvironmentSection(environment)).toBe(`# Environment
+- OS: Windows 11.0.0
+- Architecture: x64
+- Shell: powershell
+- Working directory: C:/WorkSpace/ResearchProjects/OpenHarnessTS
+- Date: 2026-06-12
+- Node: v20.14.0
+- Node executable: C:/Program Files/nodejs/node.exe
+- Git: yes (branch: master)`);
+  });
+
+  it("formats a branchless git environment without an undefined branch", () => {
+    const { gitBranch: _gitBranch, ...branchless } = environment;
+
+    expect(formatEnvironmentSection(branchless)).toBe(`# Environment
+- OS: Windows 11.0.0
+- Architecture: x64
+- Shell: powershell
+- Working directory: C:/WorkSpace/ResearchProjects/OpenHarnessTS
+- Date: 2026-06-12
+- Node: v20.14.0
+- Node executable: C:/Program Files/nodejs/node.exe
+- Git: yes`);
+  });
+
+  it("formats a non-git environment without git details", () => {
+    const { gitBranch: _gitBranch, ...branchless } = environment;
+    const nonGit = {
+      ...branchless,
+      isGitRepo: false
+    };
+
+    expect(formatEnvironmentSection(nonGit)).toBe(`# Environment
+- OS: Windows 11.0.0
+- Architecture: x64
+- Shell: powershell
+- Working directory: C:/WorkSpace/ResearchProjects/OpenHarnessTS
+- Date: 2026-06-12
+- Node: v20.14.0
+- Node executable: C:/Program Files/nodejs/node.exe`);
+  });
+});
