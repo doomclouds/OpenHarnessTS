@@ -142,6 +142,12 @@ export class DeepSeekApiClient implements ApiClient {
         : undefined;
     const maxTokens = request.maxTokens ?? this.maxTokens;
     const requestedModel = request.model.trim();
+    const toolChoice =
+      tools !== undefined &&
+      this.toolChoice !== undefined &&
+      !isUnsupportedThinkingToolChoice(this.thinking, this.toolChoice)
+        ? this.toolChoice
+        : undefined;
 
     const params: DeepSeekChatCompletionParams = {
       model: requestedModel.length > 0 ? requestedModel : this.model,
@@ -150,9 +156,7 @@ export class DeepSeekApiClient implements ApiClient {
       stream_options: { include_usage: true },
       ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
       ...(tools !== undefined ? { tools } : {}),
-      ...(tools !== undefined && this.toolChoice !== undefined
-        ? { tool_choice: this.toolChoice }
-        : {}),
+      ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
       ...(this.reasoningEffort !== undefined
         ? { reasoning_effort: this.reasoningEffort }
         : {}),
@@ -220,6 +224,13 @@ export class DeepSeekApiClient implements ApiClient {
       ...(usage !== undefined ? { usage } : {})
     });
   }
+}
+
+function isUnsupportedThinkingToolChoice(
+  thinking: DeepSeekThinkingOptions | undefined,
+  toolChoice: DeepSeekToolChoice
+): boolean {
+  return thinking?.type === "enabled" && toolChoice === "required";
 }
 
 export function createDeepSeekApiClientFromEnv(

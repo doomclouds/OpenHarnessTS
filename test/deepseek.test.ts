@@ -200,7 +200,7 @@ describe("DeepSeek client configuration", () => {
       apiKey: "direct-key",
       model: "client-model",
       maxTokens: 512,
-      thinking: { type: "enabled" },
+      thinking: { type: "disabled" },
       reasoningEffort: "high",
       toolChoice: "required",
       createSdkClient: () =>
@@ -242,6 +242,64 @@ describe("DeepSeek client configuration", () => {
           }
         ],
         tool_choice: "required",
+        reasoning_effort: "high",
+        thinking: { type: "disabled" }
+      }
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "message_complete" });
+  });
+
+  it("omits required tool choice when thinking is enabled", async () => {
+    const requests: unknown[] = [];
+    const tools: ToolApiSchema[] = [
+      {
+        name: "lookup_fixture",
+        description: "Look up a fixture value.",
+        input_schema: {
+          type: "object",
+          properties: { key: { type: "string" } },
+          required: ["key"]
+        }
+      }
+    ];
+    const client = new DeepSeekApiClient({
+      apiKey: "direct-key",
+      thinking: { type: "enabled" },
+      reasoningEffort: "high",
+      toolChoice: "required",
+      createSdkClient: () =>
+        fakeStreamSdkClient({
+          chunks: [],
+          requests
+        })
+    });
+
+    const events = [];
+    for await (const event of client.streamMessage({
+      model: "deepseek-test",
+      messages: [createUserMessageFromText("use a tool")],
+      tools
+    })) {
+      events.push(event);
+    }
+
+    expect(requests).toEqual([
+      {
+        model: "deepseek-test",
+        messages: [{ role: "user", content: "use a tool" }],
+        stream: true,
+        stream_options: { include_usage: true },
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_fixture",
+              description: "Look up a fixture value.",
+              parameters: tools[0]!.input_schema
+            }
+          }
+        ],
         reasoning_effort: "high",
         thinking: { type: "enabled" }
       }
