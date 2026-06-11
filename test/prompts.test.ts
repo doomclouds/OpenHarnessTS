@@ -1,6 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSystemPrompt,
+  collectEnvironmentInfo,
   formatEnvironmentSection,
   type EnvironmentInfo
 } from "../src/prompts/index.js";
@@ -37,6 +42,49 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("- Git: yes (branch: master)");
     expect(prompt).not.toContain("You are OpenHarnessTS");
     expect(prompt).not.toContain("OpenHarness TS");
+  });
+});
+
+describe("collectEnvironmentInfo", () => {
+  it("collects Node runtime information for a non-git directory without throwing", () => {
+    const directory = mkdtempSync(join(tmpdir(), "openharness-prompts-"));
+
+    try {
+      const info = collectEnvironmentInfo({
+        cwd: directory,
+        env: {
+          SHELL: "pwsh"
+        }
+      });
+
+      expect(info.cwd).toBe(directory);
+      expect(info.nodeVersion).toBe(process.version);
+      expect(info.nodeExecutable).toBe(process.execPath);
+      expect(info.shell).toBe("pwsh");
+      expect(info.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(info.isGitRepo).toBe(false);
+      expect(info.gitBranch).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("detects a git repository branch when git is available", () => {
+    const directory = mkdtempSync(join(tmpdir(), "openharness-prompts-git-"));
+
+    try {
+      execFileSync("git", ["init", "-b", "prompt-test"], {
+        cwd: directory,
+        stdio: "ignore"
+      });
+
+      const info = collectEnvironmentInfo({ cwd: directory });
+
+      expect(info.isGitRepo).toBe(true);
+      expect(info.gitBranch).toBe("prompt-test");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 

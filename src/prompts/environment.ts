@@ -1,3 +1,19 @@
+import { execFileSync } from "node:child_process";
+import {
+  arch,
+  homedir,
+  hostname,
+  platform,
+  release,
+  type
+} from "node:os";
+import { resolve } from "node:path";
+import process, {
+  env as processEnv,
+  execPath,
+  version
+} from "node:process";
+
 export interface EnvironmentInfo {
   readonly osName: string;
   readonly osVersion: string;
@@ -43,18 +59,63 @@ export function formatEnvironmentSection(info: EnvironmentInfo): string {
 }
 
 export function collectEnvironmentInfo(
-  _options: CollectEnvironmentInfoOptions = {}
+  options: CollectEnvironmentInfoOptions = {}
 ): EnvironmentInfo {
+  const cwd = resolve(options.cwd ?? process.cwd());
+  const shell =
+    options.env?.SHELL ??
+    options.env?.ComSpec ??
+    options.env?.COMSPEC ??
+    processEnv.SHELL ??
+    processEnv.ComSpec ??
+    processEnv.COMSPEC ??
+    "unknown";
+  const gitInfo = detectGitInfo(cwd);
+
   return {
-    osName: "unknown",
-    osVersion: "unknown",
-    platformMachine: "unknown",
-    shell: "unknown",
-    cwd: "",
-    homeDir: "",
-    date: "1970-01-01",
-    nodeVersion: "unknown",
-    nodeExecutable: "node",
-    isGitRepo: false
+    osName: type(),
+    osVersion: `${platform()} ${release()}`,
+    platformMachine: arch(),
+    shell,
+    cwd,
+    homeDir: homedir(),
+    date: new Date().toISOString().slice(0, 10),
+    nodeVersion: version,
+    nodeExecutable: execPath,
+    hostname: hostname(),
+    ...gitInfo
   };
+}
+
+function detectGitInfo(cwd: string): Pick<EnvironmentInfo, "isGitRepo" | "gitBranch"> {
+  try {
+    const isInsideWorkTree = execFileSync(
+      "git",
+      ["rev-parse", "--is-inside-work-tree"],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      }
+    )
+      .trim()
+      .toLowerCase();
+
+    if (isInsideWorkTree !== "true") {
+      return { isGitRepo: false };
+    }
+
+    const gitBranch = execFileSync("git", ["branch", "--show-current"], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+
+    return {
+      isGitRepo: true,
+      ...(gitBranch.length > 0 ? { gitBranch } : {})
+    };
+  } catch {
+    return { isGitRepo: false };
+  }
 }
