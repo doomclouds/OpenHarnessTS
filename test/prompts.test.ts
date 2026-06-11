@@ -64,6 +64,7 @@ describe("collectEnvironmentInfo", () => {
       expect(info.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(info.isGitRepo).toBe(false);
       expect(info.gitBranch).toBeUndefined();
+      expect(info.extra).toEqual({ platform: process.platform });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

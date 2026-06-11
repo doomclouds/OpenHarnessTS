@@ -83,6 +83,9 @@ export function collectEnvironmentInfo(
     nodeVersion: version,
     nodeExecutable: execPath,
     hostname: hostname(),
+    extra: {
+      platform: platform()
+    },
     ...gitInfo
   };
 }
