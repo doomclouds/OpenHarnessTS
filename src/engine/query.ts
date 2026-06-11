@@ -212,12 +212,15 @@ async function executeToolUse(
   toolUse: ToolUseBlock
 ): Promise<ToolResultBlock> {
   const rawInput = toolUse.input;
-  const preHooks = await executeHook(context, "pre_tool_use", {
-    event: "pre_tool_use",
-    toolName: toolUse.name,
-    toolInput: createHookSnapshot(rawInput),
-    toolUseId: toolUse.id
-  });
+  const preHooks =
+    context.hookExecutor === undefined
+      ? createAggregatedHookResult()
+      : await executeHook(context, "pre_tool_use", {
+          event: "pre_tool_use",
+          toolName: toolUse.name,
+          toolInput: createHookSnapshot(rawInput),
+          toolUseId: toolUse.id
+        });
 
   if (preHooks.blocked) {
     return finishToolUse(
@@ -364,31 +367,55 @@ function createHookSnapshot<T>(value: T): T {
   return deepFreezeHookSnapshot(cloneHookSnapshotValue(value)) as T;
 }
 
-function cloneHookSnapshotValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => cloneHookSnapshotValue(item));
+function cloneHookSnapshotValue(
+  value: unknown,
+  seen: WeakMap<object, unknown> = new WeakMap()
+): unknown {
+  if (!isHookSnapshotObject(value)) {
+    return value;
   }
 
-  if (isHookSnapshotObject(value)) {
-    const clone: Record<string, unknown> = {};
+  const existing = seen.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
 
-    for (const [key, nestedValue] of Object.entries(value)) {
-      clone[key] = cloneHookSnapshotValue(nestedValue);
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+
+    for (const item of value) {
+      clone.push(cloneHookSnapshotValue(item, seen));
     }
 
     return clone;
   }
 
-  return value;
+  const clone: Record<string, unknown> = {};
+  seen.set(value, clone);
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    clone[key] = cloneHookSnapshotValue(nestedValue, seen);
+  }
+
+  return clone;
 }
 
-function deepFreezeHookSnapshot<T>(value: T): T {
+function deepFreezeHookSnapshot<T>(
+  value: T,
+  seen: WeakSet<object> = new WeakSet()
+): T {
   if (!isHookSnapshotObject(value)) {
     return value;
   }
 
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+
   for (const nestedValue of Object.values(value)) {
-    deepFreezeHookSnapshot(nestedValue);
+    deepFreezeHookSnapshot(nestedValue, seen);
   }
 
   return Object.freeze(value);

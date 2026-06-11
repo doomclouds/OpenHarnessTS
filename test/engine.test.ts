@@ -923,6 +923,61 @@ describe("runQuery hook lifecycle", () => {
     });
   });
 
+  it("skips pre hook snapshots without an executor when tool input is circular", async () => {
+    const circularInput: Record<string, unknown> = {
+      value: "cycle"
+    };
+    circularInput.self = circularInput;
+
+    const execute = vi.fn((input: unknown) =>
+      createToolResult({
+        output: (input as { readonly value: string }).value
+      })
+    );
+    const tool: ToolDefinition = {
+      name: "cyclic_input",
+      description: "Receives circular input.",
+      isReadOnly: () => true,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([
+            createToolUseBlock({
+              id: "toolu_cyclic_input",
+              name: "cyclic_input",
+              input: circularInput
+            })
+          ])
+        }
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("cyclic input")];
+
+    const events = await collectEvents(client, messages, [tool]);
+
+    expect(execute).toHaveBeenCalledWith(
+      circularInput,
+      expect.objectContaining({
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+      })
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_cyclic_input",
+      content: "cycle",
+      isError: false
+    });
+  });
+
   it("isolates post_tool_use metadata snapshots from completed events and feedback", async () => {
     const hookExecutor = new InMemoryHookExecutor();
     const tool: ToolDefinition = {
@@ -1015,6 +1070,91 @@ describe("runQuery hook lifecycle", () => {
       (getToolResultMessage(messages).content[0] as { metadata: unknown })
         .metadata
     );
+  });
+
+  it("isolates post_tool_use circular metadata snapshots from completed events and feedback", async () => {
+    const circularMetadata: Record<string, unknown> = {
+      source: "cycle"
+    };
+    circularMetadata.self = circularMetadata;
+
+    const hookExecutor = new InMemoryHookExecutor();
+    const tool: ToolDefinition = {
+      name: "snapshot_circular_metadata",
+      description: "Checks circular hook metadata isolation.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "circular metadata output",
+          metadata: circularMetadata
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_snapshot_circular_metadata",
+          name: "snapshot_circular_metadata",
+          input: {}
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("snapshot circular metadata")];
+    let postMetadata: Readonly<Record<string, unknown>> | undefined;
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postMetadata = payload.toolResultMetadata;
+      const metadata = payload.toolResultMetadata as
+        | {
+            source: string;
+            self: unknown;
+          }
+        | undefined;
+
+      try {
+        if (metadata !== undefined) {
+          metadata.source = "mutated";
+          (metadata.self as { source: string }).source = "mutated through cycle";
+        }
+      } catch {
+        // Frozen snapshots may throw; either way, mutations must not leak.
+      }
+
+      return {
+        hookType: "mutator",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [tool], {
+      hookExecutor
+    });
+
+    expect(postMetadata).toBeDefined();
+    expect((postMetadata as { readonly source: string }).source).toBe("cycle");
+    expect(
+      ((postMetadata as { readonly self: unknown }).self as {
+        readonly source: string;
+      }).source
+    ).toBe("cycle");
+    expect((postMetadata as { readonly self: unknown }).self).not.toBe(
+      circularMetadata
+    );
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "snapshot_circular_metadata",
+      output: "circular metadata output",
+      isError: false,
+      toolUseId: "toolu_snapshot_circular_metadata"
+    });
+    expect(
+      (
+        (getToolResultMessage(messages).content[0] as {
+          readonly metadata: Readonly<Record<string, unknown>>;
+        }).metadata.self as Readonly<Record<string, unknown>>
+      ).source
+    ).toBe("cycle");
   });
 });
 
