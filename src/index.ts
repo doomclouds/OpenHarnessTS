@@ -87,3 +87,21 @@ export type {
   PermissionEvaluation,
   PermissionMode
 } from "./permissions/index.js";
+export {
+  createAggregatedHookResult,
+  InMemoryHookExecutor
+} from "./hooks/index.js";
+export type {
+  AggregatedHookResult,
+  HookEvent,
+  HookExecuteArgs,
+  HookExecutor,
+  HookHandler,
+  HookPayload,
+  HookPayloadByEvent,
+  HookResult,
+  PostToolUseHookPayload,
+  PreToolUseHookPayload,
+  StopHookPayload,
+  UserPromptSubmitHookPayload
+} from "./hooks/index.js";

@@ -1,6 +1,13 @@
 import type { ApiMessageCompleteEvent } from "../api/index.js";
 import {
+  createAggregatedHookResult,
+  type AggregatedHookResult,
+  type HookEvent,
+  type HookPayloadByEvent
+} from "../hooks/index.js";
+import {
   createUserMessageFromContent,
+  getMessageText,
   getToolUses,
   isEffectivelyEmpty,
   type ConversationMessage,
@@ -31,6 +38,11 @@ export async function* runQuery(
   messages: ConversationMessage[]
 ): AsyncIterable<StreamEvent> {
   const maxTurns = context.maxTurns ?? DEFAULT_MAX_TURNS;
+
+  await executeHook(context, "user_prompt_submit", {
+    event: "user_prompt_submit",
+    prompt: getLatestUserPrompt(messages)
+  });
 
   for (let turn = 0; turn < maxTurns; turn += 1) {
     let finalEvent: ApiMessageCompleteEvent | undefined;
@@ -125,6 +137,11 @@ export async function* runQuery(
       continue;
     }
 
+    await executeHook(context, "stop", {
+      event: "stop",
+      stopReason: "tool_uses_empty"
+    });
+
     return;
   }
 
@@ -137,20 +154,100 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+async function executeHook(
+  context: QueryContext,
+  ...[event, payload]: {
+    readonly [E in HookEvent]: [
+      event: E,
+      payload: HookPayloadByEvent[E]
+    ];
+  }[HookEvent]
+): Promise<AggregatedHookResult> {
+  if (context.hookExecutor === undefined) {
+    return createAggregatedHookResult();
+  }
+
+  try {
+    switch (event) {
+      case "user_prompt_submit":
+        return await context.hookExecutor.execute(event, payload);
+      case "pre_tool_use":
+        return await context.hookExecutor.execute(event, payload);
+      case "post_tool_use":
+        return await context.hookExecutor.execute(event, payload);
+      case "stop":
+        return await context.hookExecutor.execute(event, payload);
+      default:
+        return assertNever(event);
+    }
+  } catch (error) {
+    return createAggregatedHookResult([
+      {
+        hookType: "hook_executor",
+        success: false,
+        output: `Hook ${event} failed: ${getErrorMessage(error)}`
+      }
+    ]);
+  }
+}
+
+function getLatestUserPrompt(messages: readonly ConversationMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+
+    if (message?.role === "user") {
+      return getMessageText(message);
+    }
+  }
+
+  return "";
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled hook event: ${String(value)}`);
+}
+
 async function executeToolUse(
   context: QueryContext,
   toolUse: ToolUseBlock
 ): Promise<ToolResultBlock> {
-  const tool = context.toolRegistry.getTool(toolUse.name);
+  const rawInput = toolUse.input;
+  const preHooks =
+    context.hookExecutor === undefined
+      ? createAggregatedHookResult()
+      : await executeHook(context, "pre_tool_use", {
+          event: "pre_tool_use",
+          toolName: toolUse.name,
+          toolInput: createHookSnapshot(rawInput),
+          toolUseId: toolUse.id
+        });
 
-  if (tool === undefined) {
-    return createErrorToolResultBlock(
-      toolUse.id,
-      `Unknown tool: ${toolUse.name}`
+  if (preHooks.blocked) {
+    return finishToolUse(
+      context,
+      toolUse,
+      rawInput,
+      createErrorToolResultBlock(
+        toolUse.id,
+        preHooks.reason || `pre_tool_use hook blocked ${toolUse.name}`
+      )
     );
   }
 
-  const rawInput = toolUse.input;
+  const tool = context.toolRegistry.getTool(toolUse.name);
+
+  if (tool === undefined) {
+    return finishToolUse(
+      context,
+      toolUse,
+      rawInput,
+      createErrorToolResultBlock(
+        toolUse.id,
+        `Unknown tool: ${toolUse.name}`
+      )
+    );
+  }
+
   let input: unknown = rawInput;
 
   if (tool.validateInput !== undefined) {
@@ -158,17 +255,27 @@ async function executeToolUse(
       const validation = tool.validateInput(rawInput);
 
       if (!validation.ok) {
-        return createErrorToolResultBlock(
-          toolUse.id,
-          `Invalid input for ${tool.name}: ${validation.error}`
+        return finishToolUse(
+          context,
+          toolUse,
+          rawInput,
+          createErrorToolResultBlock(
+            toolUse.id,
+            `Invalid input for ${tool.name}: ${validation.error}`
+          )
         );
       }
 
       input = validation.value;
     } catch (error) {
-      return createErrorToolResultBlock(
-        toolUse.id,
-        `Invalid input for ${tool.name}: ${getErrorMessage(error)}`
+      return finishToolUse(
+        context,
+        toolUse,
+        rawInput,
+        createErrorToolResultBlock(
+          toolUse.id,
+          `Invalid input for ${tool.name}: ${getErrorMessage(error)}`
+        )
       );
     }
   }
@@ -177,9 +284,14 @@ async function executeToolUse(
   try {
     isReadOnly = tool.isReadOnly?.(input) ?? false;
   } catch (error) {
-    return createErrorToolResultBlock(
-      toolUse.id,
-      `Invalid read-only policy for ${tool.name}: ${getErrorMessage(error)}`
+    return finishToolUse(
+      context,
+      toolUse,
+      input,
+      createErrorToolResultBlock(
+        toolUse.id,
+        `Invalid read-only policy for ${tool.name}: ${getErrorMessage(error)}`
+      )
     );
   }
 
@@ -190,7 +302,12 @@ async function executeToolUse(
   });
 
   if (!decision.allowed) {
-    return createErrorToolResultBlock(toolUse.id, decision.reason);
+    return finishToolUse(
+      context,
+      toolUse,
+      input,
+      createErrorToolResultBlock(toolUse.id, decision.reason)
+    );
   }
 
   let result: ToolResult;
@@ -208,10 +325,104 @@ async function executeToolUse(
     );
   }
 
-  return createToolResultBlockFromToolResult({
+  return finishToolUse(
+    context,
+    toolUse,
+    input,
+    createToolResultBlockFromToolResult({
+      toolUseId: toolUse.id,
+      result
+    })
+  );
+}
+
+async function finishToolUse(
+  context: QueryContext,
+  toolUse: ToolUseBlock,
+  toolInput: unknown,
+  toolResult: ToolResultBlock
+): Promise<ToolResultBlock> {
+  if (context.hookExecutor === undefined) {
+    return toolResult;
+  }
+
+  await executeHook(context, "post_tool_use", {
+    event: "post_tool_use",
+    toolName: toolUse.name,
+    toolInput: createHookSnapshot(toolInput),
     toolUseId: toolUse.id,
-    result
+    toolOutput: toolResult.content,
+    toolIsError: toolResult.isError,
+    toolResultMetadata: createHookSnapshot(toolResult.metadata)
   });
+
+  return toolResult;
+}
+
+function createHookSnapshot<T>(value: T): T {
+  if (!isHookSnapshotObject(value)) {
+    return value;
+  }
+
+  return deepFreezeHookSnapshot(cloneHookSnapshotValue(value)) as T;
+}
+
+function cloneHookSnapshotValue(
+  value: unknown,
+  seen: WeakMap<object, unknown> = new WeakMap()
+): unknown {
+  if (!isHookSnapshotObject(value)) {
+    return value;
+  }
+
+  const existing = seen.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+
+  if (Array.isArray(value)) {
+    const clone: unknown[] = [];
+    seen.set(value, clone);
+
+    for (const item of value) {
+      clone.push(cloneHookSnapshotValue(item, seen));
+    }
+
+    return clone;
+  }
+
+  const clone: Record<string, unknown> = {};
+  seen.set(value, clone);
+
+  for (const [key, nestedValue] of Object.entries(value)) {
+    clone[key] = cloneHookSnapshotValue(nestedValue, seen);
+  }
+
+  return clone;
+}
+
+function deepFreezeHookSnapshot<T>(
+  value: T,
+  seen: WeakSet<object> = new WeakSet()
+): T {
+  if (!isHookSnapshotObject(value)) {
+    return value;
+  }
+
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+
+  for (const nestedValue of Object.values(value)) {
+    deepFreezeHookSnapshot(nestedValue, seen);
+  }
+
+  return Object.freeze(value);
+}
+
+function isHookSnapshotObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
 }
 
 function createErrorToolResultBlock(

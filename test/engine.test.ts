@@ -6,6 +6,7 @@ import {
   createToolUseBlock,
   createUserMessageFromText,
   getMessageText,
+  InMemoryHookExecutor,
   isToolResultBlock,
   PermissionChecker,
   runQuery,
@@ -15,7 +16,11 @@ import type {
   ApiClient,
   ApiMessageRequest,
   ApiStreamEvent,
+  AggregatedHookResult,
   ConversationMessage,
+  HookExecuteArgs,
+  HookExecutor,
+  HookPayload,
   PermissionMode,
   ToolDefinition,
   StreamEvent
@@ -49,6 +54,36 @@ class ScriptedApiClient implements ApiClient {
   }
 }
 
+class EventPayloadOnlyHookExecutor implements HookExecutor {
+  public readonly calls: { readonly event: string; readonly payload: HookPayload }[] = [];
+
+  public execute(payload: HookPayload): AggregatedHookResult;
+  public execute(...args: HookExecuteArgs): AggregatedHookResult;
+  public execute(
+    ...args: [payload: HookPayload] | HookExecuteArgs
+  ): AggregatedHookResult {
+    if (args.length === 1) {
+      throw new Error("payload-only execution is not supported");
+    }
+
+    const [event, payload] = args;
+    this.calls.push({ event, payload });
+    return {
+      results: [],
+      blocked: false,
+      reason: ""
+    };
+  }
+}
+
+class ThrowingHookExecutor implements HookExecutor {
+  public execute(payload: HookPayload): AggregatedHookResult;
+  public execute(...args: HookExecuteArgs): AggregatedHookResult;
+  public execute(): AggregatedHookResult {
+    throw new Error("executor exploded");
+  }
+}
+
 async function collectEvents(
   client: ApiClient,
   messages: ConversationMessage[],
@@ -58,6 +93,7 @@ async function collectEvents(
     readonly maxTurns?: number;
     readonly permissionChecker?: PermissionChecker;
     readonly toolMetadata?: Readonly<Record<string, unknown>>;
+    readonly hookExecutor?: HookExecutor;
   } = {}
 ): Promise<readonly StreamEvent[]> {
   const registry = new ToolRegistry();
@@ -79,6 +115,9 @@ async function collectEvents(
       systemPrompt: "You are a test assistant.",
       maxTokens: 128,
       maxTurns: options.maxTurns ?? 5,
+      ...(options.hookExecutor === undefined
+        ? {}
+        : { hookExecutor: options.hookExecutor }),
       toolMetadata: options.toolMetadata ?? {
         session: "test-session"
       }
@@ -221,6 +260,904 @@ describe("runQuery plain text loop", () => {
 
 });
 
+describe("runQuery hook lifecycle", () => {
+  it("fires user_prompt_submit before the first provider request", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const messages = [createUserMessageFromText("hello hooks")];
+    const hookExecutor = new InMemoryHookExecutor();
+    const calls: string[] = [];
+
+    hookExecutor.register("user_prompt_submit", (payload) => {
+      if (payload.event !== "user_prompt_submit") {
+        throw new Error("Expected user_prompt_submit payload.");
+      }
+
+      calls.push(`hook:${payload.event}:${payload.prompt}`);
+      expect(client.requests).toEqual([]);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(client, messages, [], { hookExecutor });
+
+    expect(calls).toEqual(["hook:user_prompt_submit:hello hooks"]);
+    expect(client.requests).toHaveLength(1);
+  });
+
+  it("fires stop once on a normal no-tool-use completion", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const hookExecutor = new InMemoryHookExecutor();
+    const calls: string[] = [];
+
+    hookExecutor.register("stop", (payload) => {
+      if (payload.event !== "stop") {
+        throw new Error("Expected stop payload.");
+      }
+
+      calls.push(`${payload.event}:${payload.stopReason}`);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("plain")],
+      [],
+      { hookExecutor }
+    );
+
+    expect(calls).toEqual(["stop:tool_uses_empty"]);
+  });
+
+  it("uses the event and payload hook executor contract", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const hookExecutor = new EventPayloadOnlyHookExecutor();
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("contract")],
+      [],
+      { hookExecutor }
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete"
+    ]);
+    expect(hookExecutor.calls).toEqual([
+      {
+        event: "user_prompt_submit",
+        payload: {
+          event: "user_prompt_submit",
+          prompt: "contract"
+        }
+      },
+      {
+        event: "stop",
+        payload: {
+          event: "stop",
+          stopReason: "tool_uses_empty"
+        }
+      }
+    ]);
+  });
+
+  it("contains hook executor throws and keeps the provider flow running", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("throw hook")],
+      [],
+      { hookExecutor: new ThrowingHookExecutor() }
+    );
+
+    expect(client.requests).toHaveLength(1);
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete"
+    ]);
+  });
+
+  it("fires user_prompt_submit with an empty prompt when there is no user message", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const hookExecutor = new InMemoryHookExecutor();
+    const prompts: string[] = [];
+
+    hookExecutor.register("user_prompt_submit", (payload) => {
+      if (payload.event !== "user_prompt_submit") {
+        throw new Error("Expected user_prompt_submit payload.");
+      }
+
+      prompts.push(payload.prompt);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(client, [], [], { hookExecutor });
+
+    expect(prompts).toEqual([""]);
+    expect(client.requests[0]?.messages).toEqual([]);
+  });
+
+  it("does not fire stop when the provider throws", async () => {
+    const client: ApiClient = {
+      async *streamMessage() {
+        throw new Error("network down");
+      }
+    };
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
+
+    hookExecutor.register("stop", (payload) => {
+      stopCalls.push(payload.event);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("throw")],
+      [],
+      { hookExecutor }
+    );
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        message: "API error: network down",
+        recoverable: false
+      }
+    ]);
+    expect(stopCalls).toEqual([]);
+  });
+
+  it("does not fire stop when max turns are exceeded", async () => {
+    const client = new ScriptedApiClient([
+      [assistantToolUse({ id: "toolu_loop", name: "read", input: {} })]
+    ]);
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
+    const tool: ToolDefinition = {
+      name: "read",
+      description: "Read tool.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({ output: "read result" });
+      }
+    };
+
+    hookExecutor.register("stop", (payload) => {
+      stopCalls.push(payload.event);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("loop")],
+      [tool],
+      { hookExecutor, maxTurns: 1 }
+    );
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "Max turns exceeded: 1",
+      recoverable: false
+    });
+    expect(stopCalls).toEqual([]);
+  });
+
+  it("fires pre_tool_use before validation, read-only policy, permission evaluation, and execution", async () => {
+    const calls: string[] = [];
+    const hookExecutor = new InMemoryHookExecutor();
+    const permissionChecker = new PermissionChecker({ mode: "full_auto" });
+    const evaluate = vi.spyOn(permissionChecker, "evaluate").mockImplementation(() => {
+      calls.push("permission");
+      return {
+        allowed: true,
+        requiresConfirmation: false,
+        reason: "allowed"
+      };
+    });
+    const tool: ToolDefinition = {
+      name: "ordered",
+      description: "Records lifecycle order.",
+      validateInput(input) {
+        calls.push("validation");
+        return {
+          ok: true,
+          value: {
+            value: (input as { readonly value: number }).value + 1
+          }
+        };
+      },
+      isReadOnly(input) {
+        calls.push(`read-only:${(input as { readonly value: number }).value}`);
+        return true;
+      },
+      execute(input) {
+        calls.push(`execute:${(input as { readonly value: number }).value}`);
+        return createToolResult({ output: "done" });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_ordered",
+          name: "ordered",
+          input: { value: 1 }
+        })
+      ],
+      [textComplete("done")]
+    ]);
+
+    hookExecutor.register("pre_tool_use", (payload) => {
+      calls.push(`pre:${(payload.toolInput as { readonly value: number }).value}`);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("order")],
+      [tool],
+      { hookExecutor, permissionChecker }
+    );
+
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(calls).toEqual([
+      "pre:1",
+      "validation",
+      "read-only:2",
+      "permission",
+      "execute:2"
+    ]);
+  });
+
+  it("blocks tool execution when pre_tool_use blocks and feeds the error result back", async () => {
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const hookExecutor = new InMemoryHookExecutor();
+    const tool: ToolDefinition = {
+      name: "blocked_tool",
+      description: "Should be blocked by pre hook.",
+      validateInput() {
+        throw new Error("validation should not run");
+      },
+      isReadOnly() {
+        throw new Error("read-only policy should not run");
+      },
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_blocked",
+          name: "blocked_tool",
+          input: { value: 1 }
+        })
+      ],
+      [textComplete("handled block")]
+    ]);
+    const messages = [createUserMessageFromText("block tool")];
+    const postPayloads: HookPayload[] = [];
+
+    hookExecutor.register("pre_tool_use", () => ({
+      hookType: "guard",
+      success: true,
+      blocked: true,
+      reason: "blocked by policy"
+    }));
+    hookExecutor.register("post_tool_use", (payload) => {
+      postPayloads.push(payload);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(client, messages, [tool], { hookExecutor });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(getToolResultMessage(messages).content).toEqual([
+      {
+        type: "tool_result",
+        toolUseId: "toolu_blocked",
+        content: "blocked by policy",
+        isError: true,
+        metadata: {}
+      }
+    ]);
+    expect(client.requests[1]?.messages).toEqual(messages.slice(0, 3));
+    expect(postPayloads).toEqual([
+      {
+        event: "post_tool_use",
+        toolName: "blocked_tool",
+        toolInput: { value: 1 },
+        toolUseId: "toolu_blocked",
+        toolOutput: "blocked by policy",
+        toolIsError: true,
+        toolResultMetadata: {}
+      }
+    ]);
+  });
+
+  it("fires post_tool_use after successful tool execution with output, error state, and metadata", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const postPayloads: HookPayload[] = [];
+    const tool: ToolDefinition = {
+      name: "metadata_tool",
+      description: "Returns metadata.",
+      validateInput() {
+        return {
+          ok: true,
+          value: {
+            normalized: true
+          }
+        };
+      },
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "metadata output",
+          metadata: {
+            source: "unit-test"
+          }
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_metadata",
+          name: "metadata_tool",
+          input: { raw: true }
+        })
+      ],
+      [textComplete("done")]
+    ]);
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postPayloads.push(payload);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("metadata")],
+      [tool],
+      { hookExecutor }
+    );
+
+    expect(postPayloads).toEqual([
+      {
+        event: "post_tool_use",
+        toolName: "metadata_tool",
+        toolInput: { normalized: true },
+        toolUseId: "toolu_metadata",
+        toolOutput: "metadata output",
+        toolIsError: false,
+        toolResultMetadata: {
+          source: "unit-test"
+        }
+      }
+    ]);
+  });
+
+  it("fires post_tool_use after permission denial", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const postPayloads: HookPayload[] = [];
+    const execute = vi.fn(() => createToolResult({ output: "should not run" }));
+    const tool: ToolDefinition = {
+      name: "write_file",
+      description: "Writes a file.",
+      validateInput(input) {
+        return {
+          ok: true,
+          value: {
+            path: (input as { readonly path: string }).path,
+            normalized: true
+          }
+        };
+      },
+      isReadOnly: () => false,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_denied_post",
+          name: "write_file",
+          input: { path: "notes.txt" }
+        })
+      ],
+      [textComplete("handled denial")]
+    ]);
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postPayloads.push(payload);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("write file")],
+      [tool],
+      { hookExecutor, mode: "default" }
+    );
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(postPayloads).toEqual([
+      {
+        event: "post_tool_use",
+        toolName: "write_file",
+        toolInput: {
+          path: "notes.txt",
+          normalized: true
+        },
+        toolUseId: "toolu_denied_post",
+        toolOutput:
+          "This mutating tool requires user confirmation in default mode. Approve the prompt when asked.",
+        toolIsError: true,
+        toolResultMetadata: {}
+      }
+    ]);
+  });
+
+  it("fires stop once at the end of a multi-turn tool loop", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const calls: string[] = [];
+    const tool: ToolDefinition = {
+      name: "read",
+      description: "Reads data.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({ output: "read-output" });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [assistantToolUse({ id: "toolu_first_loop", name: "read", input: {} })],
+      [assistantToolUse({ id: "toolu_second_loop", name: "read", input: {} })],
+      [textComplete("final answer")]
+    ]);
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      calls.push(`post:${payload.toolUseId}`);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+    hookExecutor.register("stop", (payload) => {
+      calls.push(`stop:${payload.stopReason}`);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("loop")],
+      [tool],
+      { hookExecutor }
+    );
+
+    expect(calls).toEqual([
+      "post:toolu_first_loop",
+      "post:toolu_second_loop",
+      "stop:tool_uses_empty"
+    ]);
+  });
+
+  it("fires post_tool_use after unknown tool and invalid input results", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const postPayloads: HookPayload[] = [];
+    const invalidTool: ToolDefinition = {
+      name: "invalid",
+      description: "Invalid input tool.",
+      validateInput() {
+        return {
+          ok: false,
+          error: "bad input"
+        };
+      },
+      execute() {
+        return createToolResult({ output: "should not run" });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([
+            createToolUseBlock({
+              id: "toolu_unknown_post",
+              name: "missing",
+              input: { raw: "unknown" }
+            }),
+            createToolUseBlock({
+              id: "toolu_invalid_post",
+              name: "invalid",
+              input: { raw: "invalid" }
+            })
+          ])
+        }
+      ],
+      [textComplete("done")]
+    ]);
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postPayloads.push(payload);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(
+      client,
+      [createUserMessageFromText("error tools")],
+      [invalidTool],
+      { hookExecutor }
+    );
+
+    expect(postPayloads).toEqual([
+      {
+        event: "post_tool_use",
+        toolName: "missing",
+        toolInput: { raw: "unknown" },
+        toolUseId: "toolu_unknown_post",
+        toolOutput: "Unknown tool: missing",
+        toolIsError: true,
+        toolResultMetadata: {}
+      },
+      {
+        event: "post_tool_use",
+        toolName: "invalid",
+        toolInput: { raw: "invalid" },
+        toolUseId: "toolu_invalid_post",
+        toolOutput: "Invalid input for invalid: bad input",
+        toolIsError: true,
+        toolResultMetadata: {}
+      }
+    ]);
+  });
+
+  it("isolates pre_tool_use input snapshots from tool execution input", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const execute = vi.fn((input: unknown) =>
+      createToolResult({
+        output: JSON.stringify(input)
+      })
+    );
+    const tool: ToolDefinition = {
+      name: "snapshot_input",
+      description: "Checks hook input isolation.",
+      validateInput(input) {
+        return {
+          ok: true,
+          value: input
+        };
+      },
+      isReadOnly: () => true,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_snapshot_input",
+          name: "snapshot_input",
+          input: {
+            value: "original",
+            nested: {
+              count: 1
+            },
+            list: [1]
+          }
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("snapshot input")];
+
+    hookExecutor.register("pre_tool_use", (payload) => {
+      const input = payload.toolInput as {
+        value: string;
+        nested: {
+          count: number;
+        };
+        list: number[];
+      };
+
+      try {
+        input.value = "mutated";
+        input.nested.count = 99;
+        input.list.push(2);
+      } catch {
+        // Frozen snapshots may throw; either way, mutations must not leak.
+      }
+
+      return {
+        hookType: "mutator",
+        success: true
+      };
+    });
+
+    await collectEvents(client, messages, [tool], { hookExecutor });
+
+    const expectedInput = {
+      value: "original",
+      nested: {
+        count: 1
+      },
+      list: [1]
+    };
+
+    expect(execute).toHaveBeenCalledWith(
+      expectedInput,
+      expect.objectContaining({
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+      })
+    );
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_snapshot_input",
+      content: JSON.stringify(expectedInput),
+      isError: false
+    });
+  });
+
+  it("skips pre hook snapshots without an executor when tool input is circular", async () => {
+    const circularInput: Record<string, unknown> = {
+      value: "cycle"
+    };
+    circularInput.self = circularInput;
+
+    const execute = vi.fn((input: unknown) =>
+      createToolResult({
+        output: (input as { readonly value: string }).value
+      })
+    );
+    const tool: ToolDefinition = {
+      name: "cyclic_input",
+      description: "Receives circular input.",
+      isReadOnly: () => true,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        {
+          type: "message_complete",
+          message: createAssistantMessage([
+            createToolUseBlock({
+              id: "toolu_cyclic_input",
+              name: "cyclic_input",
+              input: circularInput
+            })
+          ])
+        }
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("cyclic input")];
+
+    const events = await collectEvents(client, messages, [tool]);
+
+    expect(execute).toHaveBeenCalledWith(
+      circularInput,
+      expect.objectContaining({
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+      })
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_cyclic_input",
+      content: "cycle",
+      isError: false
+    });
+  });
+
+  it("isolates post_tool_use metadata snapshots from completed events and feedback", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const tool: ToolDefinition = {
+      name: "snapshot_metadata",
+      description: "Checks hook metadata isolation.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "metadata output",
+          metadata: {
+            source: "original",
+            nested: {
+              count: 1
+            },
+            list: [1]
+          }
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_snapshot_metadata",
+          name: "snapshot_metadata",
+          input: {}
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("snapshot metadata")];
+    let postMetadata:
+      | Readonly<Record<string, unknown>>
+      | undefined;
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postMetadata = payload.toolResultMetadata;
+      const metadata = payload.toolResultMetadata as
+        | {
+            source: string;
+            nested: {
+              count: number;
+            };
+            list: number[];
+          }
+        | undefined;
+
+      try {
+        if (metadata !== undefined) {
+          metadata.source = "mutated";
+          metadata.nested.count = 99;
+          metadata.list.push(2);
+        }
+      } catch {
+        // Frozen snapshots may throw; either way, mutations must not leak.
+      }
+
+      return {
+        hookType: "mutator",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [tool], {
+      hookExecutor
+    });
+    const expectedMetadata = {
+      source: "original",
+      nested: {
+        count: 1
+      },
+      list: [1]
+    };
+
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "snapshot_metadata",
+      output: "metadata output",
+      isError: false,
+      metadata: expectedMetadata,
+      toolUseId: "toolu_snapshot_metadata"
+    });
+    expect(getToolResultMessage(messages).content[0]).toEqual({
+      type: "tool_result",
+      toolUseId: "toolu_snapshot_metadata",
+      content: "metadata output",
+      isError: false,
+      metadata: expectedMetadata
+    });
+    expect(postMetadata).not.toBe(
+      (getToolResultMessage(messages).content[0] as { metadata: unknown })
+        .metadata
+    );
+  });
+
+  it("isolates post_tool_use circular metadata snapshots from completed events and feedback", async () => {
+    const circularMetadata: Record<string, unknown> = {
+      source: "cycle"
+    };
+    circularMetadata.self = circularMetadata;
+
+    const hookExecutor = new InMemoryHookExecutor();
+    const tool: ToolDefinition = {
+      name: "snapshot_circular_metadata",
+      description: "Checks circular hook metadata isolation.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "circular metadata output",
+          metadata: circularMetadata
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_snapshot_circular_metadata",
+          name: "snapshot_circular_metadata",
+          input: {}
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("snapshot circular metadata")];
+    let postMetadata: Readonly<Record<string, unknown>> | undefined;
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postMetadata = payload.toolResultMetadata;
+      const metadata = payload.toolResultMetadata as
+        | {
+            source: string;
+            self: unknown;
+          }
+        | undefined;
+
+      try {
+        if (metadata !== undefined) {
+          metadata.source = "mutated";
+          (metadata.self as { source: string }).source = "mutated through cycle";
+        }
+      } catch {
+        // Frozen snapshots may throw; either way, mutations must not leak.
+      }
+
+      return {
+        hookType: "mutator",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [tool], {
+      hookExecutor
+    });
+
+    expect(postMetadata).toBeDefined();
+    expect((postMetadata as { readonly source: string }).source).toBe("cycle");
+    expect(
+      ((postMetadata as { readonly self: unknown }).self as {
+        readonly source: string;
+      }).source
+    ).toBe("cycle");
+    expect((postMetadata as { readonly self: unknown }).self).not.toBe(
+      circularMetadata
+    );
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "snapshot_circular_metadata",
+      output: "circular metadata output",
+      isError: false,
+      toolUseId: "toolu_snapshot_circular_metadata"
+    });
+    expect(
+      (
+        (getToolResultMessage(messages).content[0] as {
+          readonly metadata: Readonly<Record<string, unknown>>;
+        }).metadata.self as Readonly<Record<string, unknown>>
+      ).source
+    ).toBe("cycle");
+  });
+});
+
 describe("runQuery tool-call loop", () => {
   it("executes a read-only tool, appends tool results, and continues to the final answer", async () => {
     const execute = vi.fn((input: unknown) =>
@@ -347,6 +1284,75 @@ describe("runQuery tool-call loop", () => {
         metadata: {}
       }
     ]);
+    expect(getMessageText(messages[3] as ConversationMessage)).toBe(
+      "final answer"
+    );
+  });
+
+  it("skips post hook snapshots without an executor when tool metadata is circular", async () => {
+    const circularMetadata: Record<string, unknown> = {
+      source: "cycle"
+    };
+    circularMetadata.self = circularMetadata;
+
+    const tool: ToolDefinition = {
+      name: "cyclic_metadata",
+      description: "Returns circular metadata.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "cyclic output",
+          metadata: circularMetadata
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_cyclic_metadata",
+          name: "cyclic_metadata",
+          input: {}
+        })
+      ],
+      [textComplete("final answer")]
+    ]);
+    const messages = [createUserMessageFromText("run cyclic metadata tool")];
+
+    const events = await collectEvents(client, messages, [tool]);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "cyclic_metadata",
+      output: "cyclic output",
+      isError: false,
+      toolUseId: "toolu_cyclic_metadata"
+    });
+    const completedMetadata = (events[2] as {
+      readonly metadata: Readonly<Record<string, unknown>>;
+    }).metadata;
+    expect(completedMetadata.source).toBe("cycle");
+    expect(
+      (completedMetadata.self as Readonly<Record<string, unknown>>).source
+    ).toBe("cycle");
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      type: "tool_result",
+      toolUseId: "toolu_cyclic_metadata",
+      content: "cyclic output",
+      isError: false
+    });
+    const resultMetadata = (getToolResultMessage(messages).content[0] as {
+      readonly metadata: Readonly<Record<string, unknown>>;
+    }).metadata;
+    expect(resultMetadata.source).toBe("cycle");
+    expect(
+      (resultMetadata.self as Readonly<Record<string, unknown>>).source
+    ).toBe("cycle");
     expect(getMessageText(messages[3] as ConversationMessage)).toBe(
       "final answer"
     );
@@ -931,8 +1937,18 @@ describe("runQuery loop control", () => {
       ]
     ]);
     const messages = [createUserMessageFromText("empty")];
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
 
-    const events = await collectEvents(client, messages);
+    hookExecutor.register("stop", () => {
+      stopCalls.push("stop");
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [], { hookExecutor });
 
     expect(events).toEqual([
       {
@@ -943,13 +1959,24 @@ describe("runQuery loop control", () => {
       }
     ]);
     expect(messages).toEqual([createUserMessageFromText("empty")]);
+    expect(stopCalls).toEqual([]);
   });
 
   it("emits an unrecoverable error when the provider stream has no final message", async () => {
     const client = new ScriptedApiClient([[{ type: "text_delta", text: "orphan" }]]);
     const messages = [createUserMessageFromText("missing final")];
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
 
-    const events = await collectEvents(client, messages);
+    hookExecutor.register("stop", () => {
+      stopCalls.push("stop");
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [], { hookExecutor });
 
     expect(events).toEqual([
       {
@@ -962,6 +1989,7 @@ describe("runQuery loop control", () => {
         recoverable: false
       }
     ]);
+    expect(stopCalls).toEqual([]);
   });
 
   it("emits an unrecoverable error when the provider throws", async () => {
