@@ -83,6 +83,7 @@ export type {
   ApiStreamEvent,
   ApiTextDeltaEvent,
   DeepSeekProviderOptions,
+  DeepSeekReasoningEffort,
   DeepSeekSdkClient,
   DeepSeekSdkOptions,
   DeepSeekThinkingOptions,

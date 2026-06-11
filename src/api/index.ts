@@ -18,6 +18,7 @@ export {
 } from "./openai-format.js";
 export type {
   DeepSeekProviderOptions,
+  DeepSeekReasoningEffort,
   DeepSeekSdkClient,
   DeepSeekSdkOptions,
   DeepSeekThinkingOptions,

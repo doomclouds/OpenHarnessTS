@@ -5,10 +5,11 @@ import type { ApiStreamEvent } from "./events.js";
 export const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 
-export interface DeepSeekThinkingOptions {
-  readonly enabled?: boolean;
-  readonly budgetTokens?: number;
-}
+export type DeepSeekThinkingOptions =
+  | { readonly type: "disabled" }
+  | { readonly type: "enabled"; readonly budgetTokens?: number };
+
+export type DeepSeekReasoningEffort = "high" | "max";
 
 export type DeepSeekToolChoice =
   | "none"
@@ -30,7 +31,7 @@ export interface DeepSeekSdkOptions {
 export interface DeepSeekSdkClient {
   readonly chat: {
     readonly completions: {
-      create(...args: readonly unknown[]): unknown;
+      create(...args: readonly unknown[]): Promise<AsyncIterable<unknown>>;
     };
   };
 }
@@ -41,7 +42,7 @@ export interface DeepSeekProviderOptions {
   readonly model?: string;
   readonly maxTokens?: number;
   readonly thinking?: DeepSeekThinkingOptions;
-  readonly reasoningEffort?: string;
+  readonly reasoningEffort?: DeepSeekReasoningEffort;
   readonly timeout?: number;
   readonly toolChoice?: DeepSeekToolChoice;
   readonly createSdkClient?: (options: DeepSeekSdkOptions) => DeepSeekSdkClient;
@@ -52,7 +53,7 @@ export class DeepSeekApiClient implements ApiClient {
   public readonly model: string;
   public readonly maxTokens?: number;
   public readonly thinking?: DeepSeekThinkingOptions;
-  public readonly reasoningEffort?: string;
+  public readonly reasoningEffort?: DeepSeekReasoningEffort;
   public readonly toolChoice?: DeepSeekToolChoice;
 
   private readonly sdkClient: DeepSeekSdkClient;

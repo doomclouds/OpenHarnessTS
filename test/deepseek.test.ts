@@ -5,10 +5,12 @@ import {
   DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_DEEPSEEK_MODEL,
   normalizeDeepSeekBaseURL,
+  type DeepSeekReasoningEffort,
+  type DeepSeekSdkClient,
   type DeepSeekSdkOptions
 } from "../src/index.js";
 
-function emptyFakeSdkClient() {
+function emptyFakeSdkClient(): DeepSeekSdkClient {
   return {
     chat: {
       completions: {
@@ -74,8 +76,8 @@ describe("DeepSeek client configuration", () => {
       baseURL: "https://override.example.com/",
       model: "deepseek-option-model",
       maxTokens: 1024,
-      thinking: { enabled: true, budgetTokens: 128 },
-      reasoningEffort: "medium",
+      thinking: { type: "enabled", budgetTokens: 128 },
+      reasoningEffort: "high",
       createSdkClient(options) {
         sdkOptions.push(options);
         return emptyFakeSdkClient();
@@ -85,14 +87,38 @@ describe("DeepSeek client configuration", () => {
     expect(client.baseURL).toBe("https://override.example.com");
     expect(client.model).toBe("deepseek-option-model");
     expect(client.maxTokens).toBe(1024);
-    expect(client.thinking).toEqual({ enabled: true, budgetTokens: 128 });
-    expect(client.reasoningEffort).toBe("medium");
+    expect(client.thinking).toEqual({ type: "enabled", budgetTokens: 128 });
+    expect(client.reasoningEffort).toBe("high");
     expect(sdkOptions).toEqual([
       {
         apiKey: "option-key",
         baseURL: "https://override.example.com"
       }
     ]);
+  });
+
+  it("preserves disabled thinking options", () => {
+    const client = new DeepSeekApiClient({
+      apiKey: "direct-key",
+      thinking: { type: "disabled" },
+      createSdkClient: emptyFakeSdkClient
+    });
+
+    expect(client.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("preserves enabled thinking budget and high reasoning effort", () => {
+    const reasoningEffort: DeepSeekReasoningEffort = "high";
+
+    const client = new DeepSeekApiClient({
+      apiKey: "direct-key",
+      thinking: { type: "enabled", budgetTokens: 128 },
+      reasoningEffort,
+      createSdkClient: emptyFakeSdkClient
+    });
+
+    expect(client.thinking).toEqual({ type: "enabled", budgetTokens: 128 });
+    expect(client.reasoningEffort).toBe("high");
   });
 
   it("constructs with a fake SDK client and supports required tool choice", () => {
