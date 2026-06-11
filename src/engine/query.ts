@@ -339,6 +339,10 @@ async function finishToolUse(
   toolInput: unknown,
   toolResult: ToolResultBlock
 ): Promise<ToolResultBlock> {
+  if (context.hookExecutor === undefined) {
+    return toolResult;
+  }
+
   await executeHook(context, "post_tool_use", {
     event: "post_tool_use",
     toolName: toolUse.name,

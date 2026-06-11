@@ -1149,6 +1149,75 @@ describe("runQuery tool-call loop", () => {
     );
   });
 
+  it("skips post hook snapshots without an executor when tool metadata is circular", async () => {
+    const circularMetadata: Record<string, unknown> = {
+      source: "cycle"
+    };
+    circularMetadata.self = circularMetadata;
+
+    const tool: ToolDefinition = {
+      name: "cyclic_metadata",
+      description: "Returns circular metadata.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "cyclic output",
+          metadata: circularMetadata
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_cyclic_metadata",
+          name: "cyclic_metadata",
+          input: {}
+        })
+      ],
+      [textComplete("final answer")]
+    ]);
+    const messages = [createUserMessageFromText("run cyclic metadata tool")];
+
+    const events = await collectEvents(client, messages, [tool]);
+
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete",
+      "tool_execution_started",
+      "tool_execution_completed",
+      "assistant_turn_complete"
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "cyclic_metadata",
+      output: "cyclic output",
+      isError: false,
+      toolUseId: "toolu_cyclic_metadata"
+    });
+    const completedMetadata = (events[2] as {
+      readonly metadata: Readonly<Record<string, unknown>>;
+    }).metadata;
+    expect(completedMetadata.source).toBe("cycle");
+    expect(
+      (completedMetadata.self as Readonly<Record<string, unknown>>).source
+    ).toBe("cycle");
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      type: "tool_result",
+      toolUseId: "toolu_cyclic_metadata",
+      content: "cyclic output",
+      isError: false
+    });
+    const resultMetadata = (getToolResultMessage(messages).content[0] as {
+      readonly metadata: Readonly<Record<string, unknown>>;
+    }).metadata;
+    expect(resultMetadata.source).toBe("cycle");
+    expect(
+      (resultMetadata.self as Readonly<Record<string, unknown>>).source
+    ).toBe("cycle");
+    expect(getMessageText(messages[3] as ConversationMessage)).toBe(
+      "final answer"
+    );
+  });
+
   it("executes multiple read-only tools in order and appends one tool-result message", async () => {
     const firstExecute = vi.fn(() => createToolResult({ output: "first-output" }));
     const secondExecute = vi.fn(() =>
