@@ -1,19 +1,19 @@
 import type {
   AggregatedHookResult,
   HookEvent,
-  HookPayload,
+  HookPayloadByEvent,
   HookResult
 } from "./events.js";
 
-export type HookHandler = (
-  payload: HookPayload,
-  event: HookEvent
+export type HookHandler<E extends HookEvent = HookEvent> = (
+  payload: HookPayloadByEvent[E],
+  event: E
 ) => HookResult | void | Promise<HookResult | void>;
 
 export interface HookExecutor {
-  execute(
-    event: HookEvent,
-    payload: HookPayload
+  execute<E extends HookEvent>(
+    event: E,
+    payload: HookPayloadByEvent[E]
   ): AggregatedHookResult | Promise<AggregatedHookResult>;
 }
 
@@ -32,19 +32,20 @@ export function createAggregatedHookResult(
 export class InMemoryHookExecutor implements HookExecutor {
   private readonly handlers = new Map<HookEvent, HookHandler[]>();
 
-  public register(event: HookEvent, handler: HookHandler): void {
+  public register<E extends HookEvent>(event: E, handler: HookHandler<E>): void {
     const handlers = this.handlers.get(event) ?? [];
-    handlers.push(handler);
+    handlers.push(handler as HookHandler);
     this.handlers.set(event, handlers);
   }
 
-  public async execute(
-    event: HookEvent,
-    payload: HookPayload
+  public async execute<E extends HookEvent>(
+    event: E,
+    payload: HookPayloadByEvent[E]
   ): Promise<AggregatedHookResult> {
     const results: HookResult[] = [];
+    const handlers = (this.handlers.get(event) ?? []) as HookHandler<E>[];
 
-    for (const handler of this.handlers.get(event) ?? []) {
+    for (const handler of handlers) {
       try {
         const result = await handler(payload, event);
         results.push(

@@ -31,11 +31,14 @@ export interface StopHookPayload {
   readonly stopReason: "tool_uses_empty";
 }
 
-export type HookPayload =
-  | UserPromptSubmitHookPayload
-  | PreToolUseHookPayload
-  | PostToolUseHookPayload
-  | StopHookPayload;
+export interface HookPayloadByEvent {
+  readonly user_prompt_submit: UserPromptSubmitHookPayload;
+  readonly pre_tool_use: PreToolUseHookPayload;
+  readonly post_tool_use: PostToolUseHookPayload;
+  readonly stop: StopHookPayload;
+}
+
+export type HookPayload = HookPayloadByEvent[HookEvent];
 
 export interface HookResult {
   readonly hookType: string;

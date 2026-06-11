@@ -7,6 +7,7 @@ export type {
   AggregatedHookResult,
   HookEvent,
   HookPayload,
+  HookPayloadByEvent,
   HookResult,
   PostToolUseHookPayload,
   PreToolUseHookPayload,

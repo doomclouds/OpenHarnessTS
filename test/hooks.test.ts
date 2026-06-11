@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   createAggregatedHookResult,
   InMemoryHookExecutor
@@ -67,6 +67,25 @@ describe("hook aggregation", () => {
 });
 
 describe("InMemoryHookExecutor", () => {
+  it("binds registered handlers and payloads to the hook event type", () => {
+    const executor = new InMemoryHookExecutor();
+
+    executor.register("pre_tool_use", (payload) => {
+      expectTypeOf(payload.toolName).toEqualTypeOf<string>();
+
+      return {
+        hookType: "guard",
+        success: true
+      };
+    });
+
+    void executor.execute("pre_tool_use", {
+      // @ts-expect-error stop payloads cannot be executed as pre-tool hooks.
+      event: "stop",
+      stopReason: "tool_uses_empty"
+    });
+  });
+
   it("returns a non-blocking aggregate when no handlers are registered", async () => {
     const executor = new InMemoryHookExecutor();
 
