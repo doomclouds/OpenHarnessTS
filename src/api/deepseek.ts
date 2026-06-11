@@ -24,7 +24,7 @@ export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
 
 export type DeepSeekThinkingOptions =
   | { readonly type: "disabled" }
-  | { readonly type: "enabled"; readonly budgetTokens?: number };
+  | { readonly type: "enabled" };
 
 export type DeepSeekReasoningEffort = "high" | "max";
 

@@ -101,7 +101,7 @@ describe("DeepSeek client configuration", () => {
       baseURL: "https://override.example.com/",
       model: "deepseek-option-model",
       maxTokens: 1024,
-      thinking: { type: "enabled", budgetTokens: 128 },
+      thinking: { type: "enabled" },
       reasoningEffort: "high",
       createSdkClient(options) {
         sdkOptions.push(options);
@@ -112,7 +112,7 @@ describe("DeepSeek client configuration", () => {
     expect(client.baseURL).toBe("https://override.example.com");
     expect(client.model).toBe("deepseek-option-model");
     expect(client.maxTokens).toBe(1024);
-    expect(client.thinking).toEqual({ type: "enabled", budgetTokens: 128 });
+    expect(client.thinking).toEqual({ type: "enabled" });
     expect(client.reasoningEffort).toBe("high");
     expect(sdkOptions).toEqual([
       {
@@ -132,17 +132,17 @@ describe("DeepSeek client configuration", () => {
     expect(client.thinking).toEqual({ type: "disabled" });
   });
 
-  it("preserves enabled thinking budget and high reasoning effort", () => {
+  it("preserves enabled thinking and high reasoning effort", () => {
     const reasoningEffort: DeepSeekReasoningEffort = "high";
 
     const client = new DeepSeekApiClient({
       apiKey: "direct-key",
-      thinking: { type: "enabled", budgetTokens: 128 },
+      thinking: { type: "enabled" },
       reasoningEffort,
       createSdkClient: emptyFakeSdkClient
     });
 
-    expect(client.thinking).toEqual({ type: "enabled", budgetTokens: 128 });
+    expect(client.thinking).toEqual({ type: "enabled" });
     expect(client.reasoningEffort).toBe("high");
   });
 
@@ -200,7 +200,7 @@ describe("DeepSeek client configuration", () => {
       apiKey: "direct-key",
       model: "client-model",
       maxTokens: 512,
-      thinking: { type: "enabled", budgetTokens: 128 },
+      thinking: { type: "enabled" },
       reasoningEffort: "high",
       toolChoice: "required",
       createSdkClient: () =>
@@ -243,7 +243,7 @@ describe("DeepSeek client configuration", () => {
         ],
         tool_choice: "required",
         reasoning_effort: "high",
-        thinking: { type: "enabled", budgetTokens: 128 }
+        thinking: { type: "enabled" }
       }
     ]);
     expect(events).toHaveLength(1);
