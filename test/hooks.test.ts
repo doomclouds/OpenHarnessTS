@@ -3,7 +3,12 @@ import {
   createAggregatedHookResult,
   InMemoryHookExecutor
 } from "../src/hooks/index.js";
-import type { HookEvent, HookPayload } from "../src/hooks/index.js";
+import type {
+  HookEvent,
+  HookExecutor,
+  HookPayload
+} from "../src/hooks/index.js";
+import type { HookExecutor as RootHookExecutor } from "../src/index.js";
 
 describe("hook aggregation", () => {
   it("returns the first blocking reason", () => {
@@ -226,5 +231,15 @@ describe("InMemoryHookExecutor", () => {
       blocked: false,
       reason: ""
     });
+  });
+});
+
+describe("hook root exports", () => {
+  it("exports the hook public surface from the package root", async () => {
+    const root = await import("../src/index.js");
+
+    expect(root.InMemoryHookExecutor).toBe(InMemoryHookExecutor);
+    expect(root.createAggregatedHookResult).toBe(createAggregatedHookResult);
+    expectTypeOf<RootHookExecutor>().toEqualTypeOf<HookExecutor>();
   });
 });
