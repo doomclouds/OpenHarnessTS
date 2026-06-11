@@ -16,8 +16,11 @@ import type {
   ApiClient,
   ApiMessageRequest,
   ApiStreamEvent,
+  AggregatedHookResult,
   ConversationMessage,
+  HookExecuteArgs,
   HookExecutor,
+  HookPayload,
   PermissionMode,
   ToolDefinition,
   StreamEvent
@@ -48,6 +51,36 @@ class ScriptedApiClient implements ApiClient {
     for (const event of turn) {
       yield event;
     }
+  }
+}
+
+class EventPayloadOnlyHookExecutor implements HookExecutor {
+  public readonly calls: { readonly event: string; readonly payload: HookPayload }[] = [];
+
+  public execute(payload: HookPayload): AggregatedHookResult;
+  public execute(...args: HookExecuteArgs): AggregatedHookResult;
+  public execute(
+    ...args: [payload: HookPayload] | HookExecuteArgs
+  ): AggregatedHookResult {
+    if (args.length === 1) {
+      throw new Error("payload-only execution is not supported");
+    }
+
+    const [event, payload] = args;
+    this.calls.push({ event, payload });
+    return {
+      results: [],
+      blocked: false,
+      reason: ""
+    };
+  }
+}
+
+class ThrowingHookExecutor implements HookExecutor {
+  public execute(payload: HookPayload): AggregatedHookResult;
+  public execute(...args: HookExecuteArgs): AggregatedHookResult;
+  public execute(): AggregatedHookResult {
+    throw new Error("executor exploded");
   }
 }
 
@@ -278,6 +311,149 @@ describe("runQuery hook lifecycle", () => {
     );
 
     expect(calls).toEqual(["stop:tool_uses_empty"]);
+  });
+
+  it("uses the event and payload hook executor contract", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const hookExecutor = new EventPayloadOnlyHookExecutor();
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("contract")],
+      [],
+      { hookExecutor }
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete"
+    ]);
+    expect(hookExecutor.calls).toEqual([
+      {
+        event: "user_prompt_submit",
+        payload: {
+          event: "user_prompt_submit",
+          prompt: "contract"
+        }
+      },
+      {
+        event: "stop",
+        payload: {
+          event: "stop",
+          stopReason: "tool_uses_empty"
+        }
+      }
+    ]);
+  });
+
+  it("contains hook executor throws and keeps the provider flow running", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("throw hook")],
+      [],
+      { hookExecutor: new ThrowingHookExecutor() }
+    );
+
+    expect(client.requests).toHaveLength(1);
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_turn_complete"
+    ]);
+  });
+
+  it("fires user_prompt_submit with an empty prompt when there is no user message", async () => {
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const hookExecutor = new InMemoryHookExecutor();
+    const prompts: string[] = [];
+
+    hookExecutor.register("user_prompt_submit", (payload) => {
+      if (payload.event !== "user_prompt_submit") {
+        throw new Error("Expected user_prompt_submit payload.");
+      }
+
+      prompts.push(payload.prompt);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    await collectEvents(client, [], [], { hookExecutor });
+
+    expect(prompts).toEqual([""]);
+    expect(client.requests[0]?.messages).toEqual([]);
+  });
+
+  it("does not fire stop when the provider throws", async () => {
+    const client: ApiClient = {
+      async *streamMessage() {
+        throw new Error("network down");
+      }
+    };
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
+
+    hookExecutor.register("stop", (payload) => {
+      stopCalls.push(payload.event);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("throw")],
+      [],
+      { hookExecutor }
+    );
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        message: "API error: network down",
+        recoverable: false
+      }
+    ]);
+    expect(stopCalls).toEqual([]);
+  });
+
+  it("does not fire stop when max turns are exceeded", async () => {
+    const client = new ScriptedApiClient([
+      [assistantToolUse({ id: "toolu_loop", name: "read", input: {} })]
+    ]);
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
+    const tool: ToolDefinition = {
+      name: "read",
+      description: "Read tool.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({ output: "read result" });
+      }
+    };
+
+    hookExecutor.register("stop", (payload) => {
+      stopCalls.push(payload.event);
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(
+      client,
+      [createUserMessageFromText("loop")],
+      [tool],
+      { hookExecutor, maxTurns: 1 }
+    );
+
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "Max turns exceeded: 1",
+      recoverable: false
+    });
+    expect(stopCalls).toEqual([]);
   });
 });
 

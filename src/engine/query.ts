@@ -3,7 +3,7 @@ import {
   createAggregatedHookResult,
   type AggregatedHookResult,
   type HookEvent,
-  type HookPayload
+  type HookPayloadByEvent
 } from "../hooks/index.js";
 import {
   createUserMessageFromContent,
@@ -156,15 +156,28 @@ function getErrorMessage(error: unknown): string {
 
 async function executeHook(
   context: QueryContext,
-  event: HookEvent,
-  payload: HookPayload
+  ...[event, payload]: {
+    readonly [E in HookEvent]: [
+      event: E,
+      payload: HookPayloadByEvent[E]
+    ];
+  }[HookEvent]
 ): Promise<AggregatedHookResult> {
   if (context.hookExecutor === undefined) {
     return createAggregatedHookResult();
   }
 
   try {
-    return await context.hookExecutor.execute(payload);
+    switch (event) {
+      case "user_prompt_submit":
+        return await context.hookExecutor.execute(event, payload);
+      case "pre_tool_use":
+        return await context.hookExecutor.execute(event, payload);
+      case "post_tool_use":
+        return await context.hookExecutor.execute(event, payload);
+      case "stop":
+        return await context.hookExecutor.execute(event, payload);
+    }
   } catch (error) {
     return createAggregatedHookResult([
       {
