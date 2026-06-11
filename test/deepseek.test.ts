@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDeepSeekApiClientFromEnv,
+  createUserMessageFromText,
   DeepSeekApiClient,
   DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_DEEPSEEK_MODEL,
+  getMessageText,
+  getToolUses,
   normalizeDeepSeekBaseURL,
   type DeepSeekReasoningEffort,
   type DeepSeekSdkClient,
-  type DeepSeekSdkOptions
+  type DeepSeekSdkOptions,
+  type ToolApiSchema
 } from "../src/index.js";
 
 function emptyFakeSdkClient(): DeepSeekSdkClient {
@@ -16,6 +20,27 @@ function emptyFakeSdkClient(): DeepSeekSdkClient {
       completions: {
         async create() {
           return (async function* () {})();
+        }
+      }
+    }
+  };
+}
+
+function fakeStreamSdkClient(args: {
+  readonly chunks: readonly unknown[];
+  readonly requests?: unknown[];
+}): DeepSeekSdkClient {
+  return {
+    chat: {
+      completions: {
+        async create(params) {
+          args.requests?.push(params);
+
+          return (async function* () {
+            for (const chunk of args.chunks) {
+              yield chunk;
+            }
+          })();
         }
       }
     }
@@ -158,18 +183,207 @@ describe("DeepSeek client configuration", () => {
     ).toThrow("DeepSeek API key is required.");
   });
 
-  it("keeps streamMessage as an explicit skeleton", () => {
+  it("sends streaming request params to the SDK", async () => {
+    const requests: unknown[] = [];
+    const tools: ToolApiSchema[] = [
+      {
+        name: "lookup_fixture",
+        description: "Look up a fixture value.",
+        input_schema: {
+          type: "object",
+          properties: { key: { type: "string" } },
+          required: ["key"]
+        }
+      }
+    ];
     const client = new DeepSeekApiClient({
       apiKey: "direct-key",
-      createSdkClient: emptyFakeSdkClient
+      model: "client-model",
+      maxTokens: 512,
+      thinking: { type: "enabled", budgetTokens: 128 },
+      reasoningEffort: "high",
+      toolChoice: "required",
+      createSdkClient: () =>
+        fakeStreamSdkClient({
+          chunks: [],
+          requests
+        })
     });
 
-    expect(() =>
-      client.streamMessage({
-        model: client.model,
-        messages: []
-      })
-    ).toThrow("DeepSeek streaming is not implemented yet.");
+    const events = [];
+    for await (const event of client.streamMessage({
+      model: "",
+      messages: [createUserMessageFromText("hello")],
+      systemPrompt: "You are concise.",
+      maxTokens: 1024,
+      tools
+    })) {
+      events.push(event);
+    }
+
+    expect(requests).toEqual([
+      {
+        model: "client-model",
+        messages: [
+          { role: "system", content: "You are concise." },
+          { role: "user", content: "hello" }
+        ],
+        stream: true,
+        stream_options: { include_usage: true },
+        max_tokens: 1024,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_fixture",
+              description: "Look up a fixture value.",
+              parameters: tools[0]!.input_schema
+            }
+          }
+        ],
+        tool_choice: "required",
+        reasoning_effort: "high",
+        thinking: { type: "enabled", budgetTokens: 128 }
+      }
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "message_complete" });
+  });
+
+  it("streams visible text deltas and captures reasoning and usage in the final message", async () => {
+    const client = new DeepSeekApiClient({
+      apiKey: "direct-key",
+      createSdkClient: () =>
+        fakeStreamSdkClient({
+          chunks: [
+            { choices: [{ delta: { content: "Hello" } }] },
+            { choices: [{ delta: { reasoning_content: "hidden " } }] },
+            { choices: [{ delta: { content: " world" } }] },
+            { choices: [{ delta: { reasoning_content: "thought" } }] },
+            { usage: { prompt_tokens: 7, completion_tokens: 11 } }
+          ]
+        })
+    });
+
+    const events = [];
+    for await (const event of client.streamMessage({
+      model: "deepseek-test",
+      messages: [createUserMessageFromText("hello")]
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      { type: "text_delta", text: "Hello" },
+      { type: "text_delta", text: " world" },
+      {
+        type: "message_complete",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello world" }],
+          reasoningContent: "hidden thought"
+        },
+        usage: { inputTokens: 7, outputTokens: 11 }
+      }
+    ]);
+  });
+
+  it("aggregates streamed tool call deltas by index into sorted final tool uses", async () => {
+    const client = new DeepSeekApiClient({
+      apiKey: "direct-key",
+      createSdkClient: () =>
+        fakeStreamSdkClient({
+          chunks: [
+            {
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 1,
+                        id: "call_b",
+                        type: "function",
+                        function: {
+                          name: "bad_args",
+                          arguments: "{\"bad\""
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call_a",
+                        type: "function",
+                        function: {
+                          name: "lookup_fixture",
+                          arguments: "{\"key\":"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        function: {
+                          arguments: "\"openharness\"}"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        })
+    });
+
+    const events = [];
+    for await (const event of client.streamMessage({
+      model: "deepseek-test",
+      messages: [createUserMessageFromText("use tools")]
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "message_complete" });
+
+    const complete = events[0]!;
+    expect(complete.type).toBe("message_complete");
+    if (complete.type !== "message_complete") {
+      throw new Error("Expected a complete event.");
+    }
+
+    expect(getMessageText(complete.message)).toBe("");
+    expect(getToolUses(complete.message)).toEqual([
+      {
+        type: "tool_use",
+        id: "call_a",
+        name: "lookup_fixture",
+        input: { key: "openharness" }
+      },
+      {
+        type: "tool_use",
+        id: "call_b",
+        name: "bad_args",
+        input: {}
+      }
+    ]);
   });
 
   it("normalizes base URL trailing slashes", () => {
