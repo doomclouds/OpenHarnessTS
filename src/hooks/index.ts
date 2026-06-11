@@ -6,6 +6,7 @@ export type { HookExecutor, HookHandler } from "./executor.js";
 export type {
   AggregatedHookResult,
   HookEvent,
+  HookExecuteArgs,
   HookPayload,
   HookPayloadByEvent,
   HookResult,

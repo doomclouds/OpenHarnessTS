@@ -3,6 +3,7 @@ import {
   createAggregatedHookResult,
   InMemoryHookExecutor
 } from "../src/hooks/index.js";
+import type { HookEvent, HookPayload } from "../src/hooks/index.js";
 
 describe("hook aggregation", () => {
   it("returns the first blocking reason", () => {
@@ -79,11 +80,19 @@ describe("InMemoryHookExecutor", () => {
       };
     });
 
-    void executor.execute("pre_tool_use", {
+    if (false) {
       // @ts-expect-error stop payloads cannot be executed as pre-tool hooks.
-      event: "stop",
-      stopReason: "tool_uses_empty"
-    });
+      void executor.execute("pre_tool_use", { event: "stop", stopReason: "tool_uses_empty" });
+
+      const event: HookEvent = "pre_tool_use";
+      const payload: HookPayload = {
+        event: "stop",
+        stopReason: "tool_uses_empty"
+      };
+
+      // @ts-expect-error mismatched event and payload variables are rejected.
+      void executor.execute(event, payload);
+    }
   });
 
   it("returns a non-blocking aggregate when no handlers are registered", async () => {

@@ -1,6 +1,7 @@
 import type {
   AggregatedHookResult,
   HookEvent,
+  HookExecuteArgs,
   HookPayloadByEvent,
   HookResult
 } from "./events.js";
@@ -11,10 +12,7 @@ export type HookHandler<E extends HookEvent = HookEvent> = (
 ) => HookResult | void | Promise<HookResult | void>;
 
 export interface HookExecutor {
-  execute<E extends HookEvent>(
-    event: E,
-    payload: HookPayloadByEvent[E]
-  ): AggregatedHookResult | Promise<AggregatedHookResult>;
+  execute(...args: HookExecuteArgs): AggregatedHookResult | Promise<AggregatedHookResult>;
 }
 
 export function createAggregatedHookResult(
@@ -38,12 +36,10 @@ export class InMemoryHookExecutor implements HookExecutor {
     this.handlers.set(event, handlers);
   }
 
-  public async execute<E extends HookEvent>(
-    event: E,
-    payload: HookPayloadByEvent[E]
-  ): Promise<AggregatedHookResult> {
+  public async execute(...args: HookExecuteArgs): Promise<AggregatedHookResult> {
+    const [event, payload] = args;
     const results: HookResult[] = [];
-    const handlers = (this.handlers.get(event) ?? []) as HookHandler<E>[];
+    const handlers = this.handlers.get(event) ?? [];
 
     for (const handler of handlers) {
       try {

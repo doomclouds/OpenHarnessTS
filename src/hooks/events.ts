@@ -40,6 +40,10 @@ export interface HookPayloadByEvent {
 
 export type HookPayload = HookPayloadByEvent[HookEvent];
 
+export type HookExecuteArgs = {
+  readonly [E in HookEvent]: [event: E, payload: HookPayloadByEvent[E]];
+}[HookEvent];
+
 export interface HookResult {
   readonly hookType: string;
   readonly success: boolean;
