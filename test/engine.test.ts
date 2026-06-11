@@ -1167,8 +1167,18 @@ describe("runQuery loop control", () => {
       ]
     ]);
     const messages = [createUserMessageFromText("empty")];
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
 
-    const events = await collectEvents(client, messages);
+    hookExecutor.register("stop", () => {
+      stopCalls.push("stop");
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [], { hookExecutor });
 
     expect(events).toEqual([
       {
@@ -1179,13 +1189,24 @@ describe("runQuery loop control", () => {
       }
     ]);
     expect(messages).toEqual([createUserMessageFromText("empty")]);
+    expect(stopCalls).toEqual([]);
   });
 
   it("emits an unrecoverable error when the provider stream has no final message", async () => {
     const client = new ScriptedApiClient([[{ type: "text_delta", text: "orphan" }]]);
     const messages = [createUserMessageFromText("missing final")];
+    const hookExecutor = new InMemoryHookExecutor();
+    const stopCalls: string[] = [];
 
-    const events = await collectEvents(client, messages);
+    hookExecutor.register("stop", () => {
+      stopCalls.push("stop");
+      return {
+        hookType: "recorder",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [], { hookExecutor });
 
     expect(events).toEqual([
       {
@@ -1198,6 +1219,7 @@ describe("runQuery loop control", () => {
         recoverable: false
       }
     ]);
+    expect(stopCalls).toEqual([]);
   });
 
   it("emits an unrecoverable error when the provider throws", async () => {
