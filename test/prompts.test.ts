@@ -15,6 +15,10 @@ import {
   formatEnvironmentSection,
   type EnvironmentInfo
 } from "../src/prompts/index.js";
+import {
+  buildSystemPrompt as buildSystemPromptFromRoot,
+  formatEnvironmentSection as formatEnvironmentSectionFromRoot
+} from "../src/index.js";
 
 const environment: EnvironmentInfo = {
   osName: "Windows",
@@ -227,5 +231,26 @@ describe("formatEnvironmentSection", () => {
 - Date: 2026-06-12
 - Node: v20.14.0
 - Node executable: C:/Program Files/nodejs/node.exe`);
+  });
+});
+
+describe("prompt root exports", () => {
+  it("exports prompt builders from the package root", () => {
+    expect(buildSystemPromptFromRoot({ environment })).toBe(
+      buildSystemPrompt({ environment })
+    );
+    expect(formatEnvironmentSectionFromRoot(environment)).toBe(
+      formatEnvironmentSection(environment)
+    );
+  });
+});
+
+describe("prompt integration boundary", () => {
+  it("keeps runQuery from implicitly importing the prompt builder", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/engine/query.ts", "utf8");
+
+    expect(source).not.toContain("buildSystemPrompt");
+    expect(source).not.toContain("../prompts");
   });
 });

@@ -122,3 +122,14 @@ export type {
   StopHookPayload,
   UserPromptSubmitHookPayload
 } from "./hooks/index.js";
+export {
+  buildSystemPrompt,
+  collectEnvironmentInfo,
+  DEFAULT_SYSTEM_PROMPT,
+  formatEnvironmentSection
+} from "./prompts/index.js";
+export type {
+  BuildSystemPromptOptions,
+  CollectEnvironmentInfoOptions,
+  EnvironmentInfo
+} from "./prompts/index.js";
