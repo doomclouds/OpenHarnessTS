@@ -63,6 +63,9 @@ export type {
   UsageSnapshot
 } from "./stream-events/index.js";
 export {
+  convertAssistantMessageToOpenAI,
+  convertMessagesToOpenAI,
+  convertToolsToOpenAI,
   createApiMessageCompleteEvent,
   createApiRetryEvent,
   createApiTextDeltaEvent
@@ -73,7 +76,10 @@ export type {
   ApiMessageRequest,
   ApiRetryEvent,
   ApiStreamEvent,
-  ApiTextDeltaEvent
+  ApiTextDeltaEvent,
+  OpenAIChatMessage,
+  OpenAIFunctionTool,
+  OpenAIToolCall
 } from "./api/index.js";
 export { runQuery } from "./engine/index.js";
 export type { QueryContext } from "./engine/index.js";
