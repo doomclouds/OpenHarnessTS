@@ -1,7 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSystemPrompt,
@@ -85,6 +91,82 @@ describe("collectEnvironmentInfo", () => {
       expect(info.gitBranch).toBe("prompt-test");
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps git repository status when branch lookup fails", () => {
+    const directory = mkdtempSync(join(tmpdir(), "openharness-prompts-branchless-"));
+    const gitBin = mkdtempSync(join(tmpdir(), "openharness-prompts-git-bin-"));
+    const pathKey =
+      Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+
+    try {
+      const gitEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        [pathKey]:
+          process.env[pathKey] === undefined
+            ? gitBin
+            : `${gitBin}${delimiter}${process.env[pathKey]}`
+      };
+      gitEnv.PATH = gitEnv[pathKey];
+      gitEnv.Path = gitEnv[pathKey];
+
+      if (process.platform === "win32") {
+        const gitHook = join(gitBin, "git-shim.cjs");
+
+        writeFileSync(
+          gitHook,
+          `const path = require("node:path");
+const args = process.argv.slice(1);
+const command = args[0] === undefined ? "" : path.basename(args[0]);
+
+if (command === "rev-parse" && args[1] === "--is-inside-work-tree") {
+  process.stdout.write("true\\n");
+  process.exit(0);
+}
+
+if (command === "branch" && args[1] === "--show-current") {
+  process.exit(1);
+}
+
+process.exit(1);
+`,
+          "utf8"
+        );
+        copyFileSync(process.execPath, join(gitBin, "git.exe"));
+        gitEnv.NODE_OPTIONS =
+          process.env.NODE_OPTIONS === undefined
+            ? `--require=${gitHook}`
+            : `${process.env.NODE_OPTIONS} --require=${gitHook}`;
+      } else {
+        const gitShim = join(gitBin, "git");
+
+        writeFileSync(
+          gitShim,
+          `#!/bin/sh
+if [ "$1" = "rev-parse" ] && [ "$2" = "--is-inside-work-tree" ]; then
+  printf 'true\\n'
+  exit 0
+fi
+
+if [ "$1" = "branch" ] && [ "$2" = "--show-current" ]; then
+  exit 1
+fi
+
+exit 1
+`,
+          "utf8"
+        );
+        chmodSync(gitShim, 0o755);
+      }
+
+      const info = collectEnvironmentInfo({ cwd: directory, env: gitEnv });
+
+      expect(info.isGitRepo).toBe(true);
+      expect(info.gitBranch).toBeUndefined();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+      rmSync(gitBin, { recursive: true, force: true });
     }
   });
 });

@@ -70,7 +70,9 @@ export function collectEnvironmentInfo(
     processEnv.ComSpec ??
     processEnv.COMSPEC ??
     "unknown";
-  const gitInfo = detectGitInfo(cwd);
+  const commandEnv =
+    options.env === undefined ? undefined : { ...processEnv, ...options.env };
+  const gitInfo = detectGitInfo(cwd, commandEnv);
 
   return {
     osName: type(),
@@ -90,13 +92,17 @@ export function collectEnvironmentInfo(
   };
 }
 
-function detectGitInfo(cwd: string): Pick<EnvironmentInfo, "isGitRepo" | "gitBranch"> {
+function detectGitInfo(
+  cwd: string,
+  env?: NodeJS.ProcessEnv
+): Pick<EnvironmentInfo, "isGitRepo" | "gitBranch"> {
   try {
     const isInsideWorkTree = execFileSync(
       "git",
       ["rev-parse", "--is-inside-work-tree"],
       {
         cwd,
+        env,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"]
       }
@@ -108,17 +114,29 @@ function detectGitInfo(cwd: string): Pick<EnvironmentInfo, "isGitRepo" | "gitBra
       return { isGitRepo: false };
     }
 
+    return {
+      isGitRepo: true,
+      ...detectGitBranch(cwd, env)
+    };
+  } catch {
+    return { isGitRepo: false };
+  }
+}
+
+function detectGitBranch(
+  cwd: string,
+  env?: NodeJS.ProcessEnv
+): Pick<EnvironmentInfo, "gitBranch"> {
+  try {
     const gitBranch = execFileSync("git", ["branch", "--show-current"], {
       cwd,
+      env,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"]
     }).trim();
 
-    return {
-      isGitRepo: true,
-      ...(gitBranch.length > 0 ? { gitBranch } : {})
-    };
+    return gitBranch.length > 0 ? { gitBranch } : {};
   } catch {
-    return { isGitRepo: false };
+    return {};
   }
 }
