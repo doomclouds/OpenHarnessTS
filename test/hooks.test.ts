@@ -80,6 +80,12 @@ describe("InMemoryHookExecutor", () => {
       };
     });
 
+    const dynamicPayload: HookPayload = {
+      event: "stop",
+      stopReason: "tool_uses_empty"
+    };
+    void executor.execute(dynamicPayload);
+
     if (false) {
       // @ts-expect-error stop payloads cannot be executed as pre-tool hooks.
       void executor.execute("pre_tool_use", { event: "stop", stopReason: "tool_uses_empty" });
@@ -158,6 +164,38 @@ describe("InMemoryHookExecutor", () => {
         {
           hookType: "in_memory",
           success: true
+        }
+      ],
+      blocked: false,
+      reason: ""
+    });
+  });
+
+  it("awaits async handlers when dispatching by payload", async () => {
+    const executor = new InMemoryHookExecutor();
+    const payload: HookPayload = {
+      event: "stop",
+      stopReason: "tool_uses_empty"
+    };
+
+    executor.register("stop", async () => {
+      await Promise.resolve();
+
+      return {
+        hookType: "async",
+        success: true,
+        output: "done"
+      };
+    });
+
+    const result = await executor.execute(payload);
+
+    expect(result).toEqual({
+      results: [
+        {
+          hookType: "async",
+          success: true,
+          output: "done"
         }
       ],
       blocked: false,
