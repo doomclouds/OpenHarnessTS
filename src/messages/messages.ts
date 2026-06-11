@@ -11,6 +11,11 @@ export type MessageRole = "user" | "assistant";
 export interface ConversationMessage {
   readonly role: MessageRole;
   readonly content: readonly ContentBlock[];
+  readonly reasoningContent?: string;
+}
+
+export interface AssistantMessageOptions {
+  readonly reasoningContent?: string;
 }
 
 export function createUserMessageFromText(text: string): ConversationMessage {
@@ -30,11 +35,15 @@ export function createUserMessageFromContent(
 }
 
 export function createAssistantMessage(
-  content: readonly ContentBlock[]
+  content: readonly ContentBlock[],
+  options: AssistantMessageOptions = {}
 ): ConversationMessage {
   return {
     role: "assistant",
-    content: [...content]
+    content: [...content],
+    ...(options.reasoningContent !== undefined
+      ? { reasoningContent: options.reasoningContent }
+      : {})
   };
 }
 

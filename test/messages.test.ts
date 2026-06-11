@@ -255,3 +255,23 @@ describe("message root exports", () => {
     });
   });
 });
+
+describe("assistant reasoning content", () => {
+  it("preserves optional reasoning content on assistant messages", () => {
+    const message = createAssistantMessage([createTextBlock("answer")], {
+      reasoningContent: "private reasoning"
+    });
+
+    expect(message).toEqual({
+      role: "assistant",
+      content: [createTextBlock("answer")],
+      reasoningContent: "private reasoning"
+    });
+  });
+
+  it("omits reasoning content when it is not supplied", () => {
+    const message = createAssistantMessage([createTextBlock("answer")]);
+
+    expect("reasoningContent" in message).toBe(false);
+  });
+});

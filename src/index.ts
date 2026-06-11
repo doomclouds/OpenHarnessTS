@@ -63,9 +63,17 @@ export type {
   UsageSnapshot
 } from "./stream-events/index.js";
 export {
+  convertAssistantMessageToOpenAI,
+  convertMessagesToOpenAI,
+  convertToolsToOpenAI,
+  createDeepSeekApiClientFromEnv,
   createApiMessageCompleteEvent,
   createApiRetryEvent,
-  createApiTextDeltaEvent
+  createApiTextDeltaEvent,
+  DeepSeekApiClient,
+  DEFAULT_DEEPSEEK_BASE_URL,
+  DEFAULT_DEEPSEEK_MODEL,
+  normalizeDeepSeekBaseURL
 } from "./api/index.js";
 export type {
   ApiClient,
@@ -73,7 +81,16 @@ export type {
   ApiMessageRequest,
   ApiRetryEvent,
   ApiStreamEvent,
-  ApiTextDeltaEvent
+  ApiTextDeltaEvent,
+  DeepSeekProviderOptions,
+  DeepSeekReasoningEffort,
+  DeepSeekSdkClient,
+  DeepSeekSdkOptions,
+  DeepSeekThinkingOptions,
+  DeepSeekToolChoice,
+  OpenAIChatMessage,
+  OpenAIFunctionTool,
+  OpenAIToolCall
 } from "./api/index.js";
 export { runQuery } from "./engine/index.js";
 export type { QueryContext } from "./engine/index.js";
