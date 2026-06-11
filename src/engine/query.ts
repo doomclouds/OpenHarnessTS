@@ -177,6 +177,8 @@ async function executeHook(
         return await context.hookExecutor.execute(event, payload);
       case "stop":
         return await context.hookExecutor.execute(event, payload);
+      default:
+        return assertNever(event);
     }
   } catch (error) {
     return createAggregatedHookResult([
@@ -201,20 +203,48 @@ function getLatestUserPrompt(messages: readonly ConversationMessage[]): string {
   return "";
 }
 
+function assertNever(value: never): never {
+  throw new Error(`Unhandled hook event: ${String(value)}`);
+}
+
 async function executeToolUse(
   context: QueryContext,
   toolUse: ToolUseBlock
 ): Promise<ToolResultBlock> {
-  const tool = context.toolRegistry.getTool(toolUse.name);
+  const rawInput = toolUse.input;
+  const preHooks = await executeHook(context, "pre_tool_use", {
+    event: "pre_tool_use",
+    toolName: toolUse.name,
+    toolInput: rawInput,
+    toolUseId: toolUse.id
+  });
 
-  if (tool === undefined) {
-    return createErrorToolResultBlock(
-      toolUse.id,
-      `Unknown tool: ${toolUse.name}`
+  if (preHooks.blocked) {
+    return finishToolUse(
+      context,
+      toolUse,
+      rawInput,
+      createErrorToolResultBlock(
+        toolUse.id,
+        preHooks.reason || `pre_tool_use hook blocked ${toolUse.name}`
+      )
     );
   }
 
-  const rawInput = toolUse.input;
+  const tool = context.toolRegistry.getTool(toolUse.name);
+
+  if (tool === undefined) {
+    return finishToolUse(
+      context,
+      toolUse,
+      rawInput,
+      createErrorToolResultBlock(
+        toolUse.id,
+        `Unknown tool: ${toolUse.name}`
+      )
+    );
+  }
+
   let input: unknown = rawInput;
 
   if (tool.validateInput !== undefined) {
@@ -222,17 +252,27 @@ async function executeToolUse(
       const validation = tool.validateInput(rawInput);
 
       if (!validation.ok) {
-        return createErrorToolResultBlock(
-          toolUse.id,
-          `Invalid input for ${tool.name}: ${validation.error}`
+        return finishToolUse(
+          context,
+          toolUse,
+          rawInput,
+          createErrorToolResultBlock(
+            toolUse.id,
+            `Invalid input for ${tool.name}: ${validation.error}`
+          )
         );
       }
 
       input = validation.value;
     } catch (error) {
-      return createErrorToolResultBlock(
-        toolUse.id,
-        `Invalid input for ${tool.name}: ${getErrorMessage(error)}`
+      return finishToolUse(
+        context,
+        toolUse,
+        rawInput,
+        createErrorToolResultBlock(
+          toolUse.id,
+          `Invalid input for ${tool.name}: ${getErrorMessage(error)}`
+        )
       );
     }
   }
@@ -241,9 +281,14 @@ async function executeToolUse(
   try {
     isReadOnly = tool.isReadOnly?.(input) ?? false;
   } catch (error) {
-    return createErrorToolResultBlock(
-      toolUse.id,
-      `Invalid read-only policy for ${tool.name}: ${getErrorMessage(error)}`
+    return finishToolUse(
+      context,
+      toolUse,
+      input,
+      createErrorToolResultBlock(
+        toolUse.id,
+        `Invalid read-only policy for ${tool.name}: ${getErrorMessage(error)}`
+      )
     );
   }
 
@@ -254,7 +299,12 @@ async function executeToolUse(
   });
 
   if (!decision.allowed) {
-    return createErrorToolResultBlock(toolUse.id, decision.reason);
+    return finishToolUse(
+      context,
+      toolUse,
+      input,
+      createErrorToolResultBlock(toolUse.id, decision.reason)
+    );
   }
 
   let result: ToolResult;
@@ -272,10 +322,34 @@ async function executeToolUse(
     );
   }
 
-  return createToolResultBlockFromToolResult({
+  return finishToolUse(
+    context,
+    toolUse,
+    input,
+    createToolResultBlockFromToolResult({
+      toolUseId: toolUse.id,
+      result
+    })
+  );
+}
+
+async function finishToolUse(
+  context: QueryContext,
+  toolUse: ToolUseBlock,
+  toolInput: unknown,
+  toolResult: ToolResultBlock
+): Promise<ToolResultBlock> {
+  await executeHook(context, "post_tool_use", {
+    event: "post_tool_use",
+    toolName: toolUse.name,
+    toolInput,
     toolUseId: toolUse.id,
-    result
+    toolOutput: toolResult.content,
+    toolIsError: toolResult.isError,
+    toolResultMetadata: toolResult.metadata
   });
+
+  return toolResult;
 }
 
 function createErrorToolResultBlock(
