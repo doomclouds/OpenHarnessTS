@@ -839,6 +839,183 @@ describe("runQuery hook lifecycle", () => {
       }
     ]);
   });
+
+  it("isolates pre_tool_use input snapshots from tool execution input", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const execute = vi.fn((input: unknown) =>
+      createToolResult({
+        output: JSON.stringify(input)
+      })
+    );
+    const tool: ToolDefinition = {
+      name: "snapshot_input",
+      description: "Checks hook input isolation.",
+      validateInput(input) {
+        return {
+          ok: true,
+          value: input
+        };
+      },
+      isReadOnly: () => true,
+      execute
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_snapshot_input",
+          name: "snapshot_input",
+          input: {
+            value: "original",
+            nested: {
+              count: 1
+            },
+            list: [1]
+          }
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("snapshot input")];
+
+    hookExecutor.register("pre_tool_use", (payload) => {
+      const input = payload.toolInput as {
+        value: string;
+        nested: {
+          count: number;
+        };
+        list: number[];
+      };
+
+      try {
+        input.value = "mutated";
+        input.nested.count = 99;
+        input.list.push(2);
+      } catch {
+        // Frozen snapshots may throw; either way, mutations must not leak.
+      }
+
+      return {
+        hookType: "mutator",
+        success: true
+      };
+    });
+
+    await collectEvents(client, messages, [tool], { hookExecutor });
+
+    const expectedInput = {
+      value: "original",
+      nested: {
+        count: 1
+      },
+      list: [1]
+    };
+
+    expect(execute).toHaveBeenCalledWith(
+      expectedInput,
+      expect.objectContaining({
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+      })
+    );
+    expect(getToolResultMessage(messages).content[0]).toMatchObject({
+      toolUseId: "toolu_snapshot_input",
+      content: JSON.stringify(expectedInput),
+      isError: false
+    });
+  });
+
+  it("isolates post_tool_use metadata snapshots from completed events and feedback", async () => {
+    const hookExecutor = new InMemoryHookExecutor();
+    const tool: ToolDefinition = {
+      name: "snapshot_metadata",
+      description: "Checks hook metadata isolation.",
+      isReadOnly: () => true,
+      execute() {
+        return createToolResult({
+          output: "metadata output",
+          metadata: {
+            source: "original",
+            nested: {
+              count: 1
+            },
+            list: [1]
+          }
+        });
+      }
+    };
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_snapshot_metadata",
+          name: "snapshot_metadata",
+          input: {}
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("snapshot metadata")];
+    let postMetadata:
+      | Readonly<Record<string, unknown>>
+      | undefined;
+
+    hookExecutor.register("post_tool_use", (payload) => {
+      postMetadata = payload.toolResultMetadata;
+      const metadata = payload.toolResultMetadata as
+        | {
+            source: string;
+            nested: {
+              count: number;
+            };
+            list: number[];
+          }
+        | undefined;
+
+      try {
+        if (metadata !== undefined) {
+          metadata.source = "mutated";
+          metadata.nested.count = 99;
+          metadata.list.push(2);
+        }
+      } catch {
+        // Frozen snapshots may throw; either way, mutations must not leak.
+      }
+
+      return {
+        hookType: "mutator",
+        success: true
+      };
+    });
+
+    const events = await collectEvents(client, messages, [tool], {
+      hookExecutor
+    });
+    const expectedMetadata = {
+      source: "original",
+      nested: {
+        count: 1
+      },
+      list: [1]
+    };
+
+    expect(events[2]).toMatchObject({
+      type: "tool_execution_completed",
+      toolName: "snapshot_metadata",
+      output: "metadata output",
+      isError: false,
+      metadata: expectedMetadata,
+      toolUseId: "toolu_snapshot_metadata"
+    });
+    expect(getToolResultMessage(messages).content[0]).toEqual({
+      type: "tool_result",
+      toolUseId: "toolu_snapshot_metadata",
+      content: "metadata output",
+      isError: false,
+      metadata: expectedMetadata
+    });
+    expect(postMetadata).not.toBe(
+      (getToolResultMessage(messages).content[0] as { metadata: unknown })
+        .metadata
+    );
+  });
 });
 
 describe("runQuery tool-call loop", () => {

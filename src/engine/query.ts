@@ -215,7 +215,7 @@ async function executeToolUse(
   const preHooks = await executeHook(context, "pre_tool_use", {
     event: "pre_tool_use",
     toolName: toolUse.name,
-    toolInput: rawInput,
+    toolInput: createHookSnapshot(rawInput),
     toolUseId: toolUse.id
   });
 
@@ -342,14 +342,56 @@ async function finishToolUse(
   await executeHook(context, "post_tool_use", {
     event: "post_tool_use",
     toolName: toolUse.name,
-    toolInput,
+    toolInput: createHookSnapshot(toolInput),
     toolUseId: toolUse.id,
     toolOutput: toolResult.content,
     toolIsError: toolResult.isError,
-    toolResultMetadata: toolResult.metadata
+    toolResultMetadata: createHookSnapshot(toolResult.metadata)
   });
 
   return toolResult;
+}
+
+function createHookSnapshot<T>(value: T): T {
+  if (!isHookSnapshotObject(value)) {
+    return value;
+  }
+
+  return deepFreezeHookSnapshot(cloneHookSnapshotValue(value)) as T;
+}
+
+function cloneHookSnapshotValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneHookSnapshotValue(item));
+  }
+
+  if (isHookSnapshotObject(value)) {
+    const clone: Record<string, unknown> = {};
+
+    for (const [key, nestedValue] of Object.entries(value)) {
+      clone[key] = cloneHookSnapshotValue(nestedValue);
+    }
+
+    return clone;
+  }
+
+  return value;
+}
+
+function deepFreezeHookSnapshot<T>(value: T): T {
+  if (!isHookSnapshotObject(value)) {
+    return value;
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    deepFreezeHookSnapshot(nestedValue);
+  }
+
+  return Object.freeze(value);
+}
+
+function isHookSnapshotObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
 }
 
 function createErrorToolResultBlock(
