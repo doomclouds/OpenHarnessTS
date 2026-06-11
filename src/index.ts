@@ -66,9 +66,14 @@ export {
   convertAssistantMessageToOpenAI,
   convertMessagesToOpenAI,
   convertToolsToOpenAI,
+  createDeepSeekApiClientFromEnv,
   createApiMessageCompleteEvent,
   createApiRetryEvent,
-  createApiTextDeltaEvent
+  createApiTextDeltaEvent,
+  DeepSeekApiClient,
+  DEFAULT_DEEPSEEK_BASE_URL,
+  DEFAULT_DEEPSEEK_MODEL,
+  normalizeDeepSeekBaseURL
 } from "./api/index.js";
 export type {
   ApiClient,
@@ -77,6 +82,11 @@ export type {
   ApiRetryEvent,
   ApiStreamEvent,
   ApiTextDeltaEvent,
+  DeepSeekProviderOptions,
+  DeepSeekSdkClient,
+  DeepSeekSdkOptions,
+  DeepSeekThinkingOptions,
+  DeepSeekToolChoice,
   OpenAIChatMessage,
   OpenAIFunctionTool,
   OpenAIToolCall
