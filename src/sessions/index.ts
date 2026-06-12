@@ -32,3 +32,13 @@ export {
   reconstructSessionSnapshot,
   serializeSessionRecords
 } from "./jsonl.js";
+export {
+  FileSessionBackend,
+  exportSessionTranscript,
+  listRecentSessions,
+  loadLatestSession,
+  loadSessionById,
+  saveQueryEngineSnapshot,
+  saveSessionSnapshot
+} from "./filesystem.js";
+export { renderSessionTranscript } from "./transcript.js";
