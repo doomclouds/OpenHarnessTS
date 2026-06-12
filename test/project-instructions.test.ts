@@ -28,6 +28,10 @@ function paths(files: readonly ProjectInstructionFile[]): readonly string[] {
   return files.map((file) => file.path);
 }
 
+function codePointLength(value: string): number {
+  return Array.from(value).length;
+}
+
 describe("discoverProjectInstructions", () => {
   it("discovers project instructions from cwd upward in stable order", () => {
     const root = makeTempProject("openharness-instructions-");
@@ -223,6 +227,7 @@ use repo rules
         stopAt: repo,
         maxCharsPerFile: 3
       });
+      const truncatedContent = "abc\n...[truncated]...";
 
       expect(loaded?.files.map((file) => ({
         content: file.content,
@@ -231,9 +236,9 @@ use repo rules
         truncated: file.truncated
       }))).toEqual([
         {
-          content: "abc\n...[truncated]...",
+          content: truncatedContent,
           originalCharCount: 6,
-          loadedCharCount: 21,
+          loadedCharCount: codePointLength(truncatedContent),
           truncated: true
         },
         {
@@ -243,6 +248,32 @@ use repo rules
           truncated: false
         }
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates astral unicode by code point without replacement chars", () => {
+    const root = makeTempProject("openharness-instructions-unicode-truncate-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "😀abc");
+
+      const loaded = loadProjectInstructions(repo, {
+        stopAt: repo,
+        maxCharsPerFile: 2
+      });
+      const expectedContent = "😀a\n...[truncated]...";
+
+      expect(loaded?.files[0]).toMatchObject({
+        content: expectedContent,
+        originalCharCount: 4,
+        loadedCharCount: codePointLength(expectedContent),
+        truncated: true
+      });
+      expect(loaded?.files[0]?.content).not.toContain("\uFFFD");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

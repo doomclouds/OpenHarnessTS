@@ -122,16 +122,18 @@ export function loadProjectInstructions(
 
   const files = discovered.map((file): LoadedProjectInstruction => {
     const raw = decodeUtf8WithReplacement(readFileSync(file.path));
-    const truncated = raw.length > maxCharsPerFile;
+    const rawCharacters = Array.from(raw);
+    const originalCharCount = rawCharacters.length;
+    const truncated = originalCharCount > maxCharsPerFile;
     const content = truncated
-      ? `${raw.slice(0, maxCharsPerFile)}${TRUNCATION_MARKER}`
+      ? `${rawCharacters.slice(0, maxCharsPerFile).join("")}${TRUNCATION_MARKER}`
       : raw;
 
     return {
       ...file,
       content,
-      originalCharCount: raw.length,
-      loadedCharCount: content.length,
+      originalCharCount,
+      loadedCharCount: Array.from(content).length,
       truncated
     };
   });
