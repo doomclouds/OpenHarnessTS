@@ -1,6 +1,19 @@
 export { HarnessRuntime } from "./runtime.js";
 export type { HarnessRuntimeOptions } from "./types.js";
 export {
+  ensureOpenHarnessPaths,
+  ensureProjectPaths,
+  getProjectSessionDir,
+  resolveOpenHarnessPaths,
+  resolveProjectPaths
+} from "./config/index.js";
+export type {
+  OpenHarnessPaths,
+  ProjectPaths,
+  ResolveOpenHarnessPathsOptions,
+  ResolveProjectPathsOptions
+} from "./config/index.js";
+export {
   createToolErrorResult,
   createToolResult,
   createToolResultBlockFromToolResult,
