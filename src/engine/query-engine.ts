@@ -130,6 +130,22 @@ export class QueryEngine {
     return [...this.messages];
   }
 
+  public getCwd(): string {
+    return this.cwd;
+  }
+
+  public getModel(): string {
+    return this.model;
+  }
+
+  public getSystemPrompt(): string {
+    return this.systemPrompt;
+  }
+
+  public getToolMetadata(): Readonly<Record<string, unknown>> {
+    return { ...(this.toolMetadata ?? {}) };
+  }
+
   public registerTool(tool: ToolDefinition): void {
     this.toolRegistry.register(tool);
   }
