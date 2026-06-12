@@ -254,5 +254,16 @@ describe("prompt integration boundary", () => {
 
     expect(source).not.toContain("buildSystemPrompt");
     expect(source).not.toContain("../prompts");
+    expect(source).not.toContain("project-instructions");
+    expect(source).not.toContain("loadProjectInstructions");
+  });
+
+  it("keeps buildSystemPrompt from implicitly loading project instructions", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/prompts/system-prompt.ts", "utf8");
+
+    expect(source).not.toContain("project-instructions");
+    expect(source).not.toContain("loadProjectInstructions");
+    expect(source).not.toContain("discoverProjectInstructions");
   });
 });

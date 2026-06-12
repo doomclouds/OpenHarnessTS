@@ -1,0 +1,282 @@
+import {
+  type Dirent,
+  readFileSync,
+  readdirSync,
+  statSync
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { TextDecoder } from "node:util";
+
+export type ProjectInstructionKind =
+  | "agents"
+  | "claude"
+  | "claude_project"
+  | "claude_rule";
+
+export interface ProjectInstructionFile {
+  readonly path: string;
+  readonly kind: ProjectInstructionKind;
+  readonly directory: string;
+  readonly order: number;
+}
+
+export interface LoadedProjectInstruction extends ProjectInstructionFile {
+  readonly content: string;
+  readonly originalCharCount: number;
+  readonly loadedCharCount: number;
+  readonly truncated: boolean;
+}
+
+export interface ProjectInstructions {
+  readonly cwd: string;
+  readonly files: readonly LoadedProjectInstruction[];
+  readonly section: string;
+}
+
+export interface DiscoverProjectInstructionsOptions {
+  readonly stopAt?: string | URL;
+}
+
+export interface LoadProjectInstructionsOptions
+  extends DiscoverProjectInstructionsOptions {
+  readonly maxCharsPerFile?: number;
+}
+
+const DEFAULT_MAX_CHARS_PER_FILE = 12000;
+const TRUNCATION_MARKER = "\n...[truncated]...";
+
+export function discoverProjectInstructions(
+  cwd: string | URL,
+  options: DiscoverProjectInstructionsOptions = {}
+): readonly ProjectInstructionFile[] {
+  const resolvedCwd = resolvePathInput(cwd, "cwd");
+  const stopAt =
+    options.stopAt === undefined
+      ? undefined
+      : resolvePathInput(options.stopAt, "stopAt");
+
+  if (stopAt !== undefined && !isInsideOrSamePath(resolvedCwd, stopAt)) {
+    throw new Error("cwd must be inside stopAt.");
+  }
+
+  const files: ProjectInstructionFile[] = [];
+  const seen = new Set<string>();
+  let current = resolvedCwd;
+
+  while (true) {
+    appendCandidate(files, seen, {
+      path: join(current, "AGENTS.md"),
+      kind: "agents",
+      directory: current
+    });
+    appendCandidate(files, seen, {
+      path: join(current, "CLAUDE.md"),
+      kind: "claude",
+      directory: current
+    });
+    appendCandidate(files, seen, {
+      path: join(current, ".claude", "CLAUDE.md"),
+      kind: "claude_project",
+      directory: join(current, ".claude")
+    });
+
+    const rulesDirectory = join(current, ".claude", "rules");
+    for (const fileName of sortedMarkdownFiles(rulesDirectory)) {
+      appendCandidate(files, seen, {
+        path: join(rulesDirectory, fileName),
+        kind: "claude_rule",
+        directory: rulesDirectory
+      });
+    }
+
+    if (stopAt !== undefined && samePath(current, stopAt)) {
+      break;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
+  return files.map((file, order) => ({ ...file, order }));
+}
+
+export function loadProjectInstructions(
+  cwd: string | URL,
+  options: LoadProjectInstructionsOptions = {}
+): ProjectInstructions | undefined {
+  const maxCharsPerFile = options.maxCharsPerFile ?? DEFAULT_MAX_CHARS_PER_FILE;
+  assertPositiveInteger(
+    maxCharsPerFile,
+    "maxCharsPerFile must be a positive integer."
+  );
+
+  const resolvedCwd = resolvePathInput(cwd, "cwd");
+  const discovered = discoverProjectInstructions(resolvedCwd, options);
+  if (discovered.length === 0) {
+    return undefined;
+  }
+
+  const files = discovered.map((file): LoadedProjectInstruction => {
+    const raw = decodeUtf8WithReplacement(readFileSync(file.path));
+    const rawCharacters = Array.from(raw);
+    const originalCharCount = rawCharacters.length;
+    const truncated = originalCharCount > maxCharsPerFile;
+    const content = truncated
+      ? `${rawCharacters.slice(0, maxCharsPerFile).join("")}${TRUNCATION_MARKER}`
+      : raw;
+
+    return {
+      ...file,
+      content,
+      originalCharCount,
+      loadedCharCount: Array.from(content).length,
+      truncated
+    };
+  });
+  const section = formatProjectInstructionsSection(files);
+
+  if (section === undefined) {
+    return undefined;
+  }
+
+  return {
+    cwd: resolvedCwd,
+    files,
+    section
+  };
+}
+
+export function formatProjectInstructionsSection(
+  files: readonly LoadedProjectInstruction[]
+): string | undefined {
+  if (files.length === 0) {
+    return undefined;
+  }
+
+  const lines = ["# Project Instructions"];
+  for (const file of files) {
+    lines.push("", `## ${file.path}`, "```md", file.content.trim(), "```");
+  }
+
+  return lines.join("\n");
+}
+
+function appendCandidate(
+  files: ProjectInstructionFile[],
+  seen: Set<string>,
+  candidate: Omit<ProjectInstructionFile, "order">
+): void {
+  const candidatePath = resolve(candidate.path);
+  if (!isFile(candidatePath)) {
+    return;
+  }
+
+  const key = pathKey(candidatePath);
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  files.push({
+    ...candidate,
+    path: candidatePath,
+    directory: resolve(candidate.directory),
+    order: files.length
+  });
+}
+
+function sortedMarkdownFiles(directory: string): readonly string[] {
+  if (!isDirectory(directory)) {
+    return [];
+  }
+
+  let entries: Array<Dirent<string>>;
+  try {
+    entries = readdirSync(directory, { encoding: "utf8", withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name)
+    .sort(comparePathNames);
+}
+
+function resolvePathInput(value: string | URL, label: "cwd" | "stopAt"): string {
+  if (value instanceof URL) {
+    if (value.protocol !== "file:") {
+      throw new Error(`${label} URL must use the file: protocol.`);
+    }
+
+    return resolve(fileURLToPath(value));
+  }
+
+  if (value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty path.`);
+  }
+
+  return resolve(value);
+}
+
+function isInsideOrSamePath(child: string, parent: string): boolean {
+  if (samePath(child, parent)) {
+    return true;
+  }
+
+  const relativePath = relative(parent, child);
+  return (
+    relativePath.length > 0 &&
+    !relativePath.startsWith("..") &&
+    !isAbsolute(relativePath)
+  );
+}
+
+function samePath(left: string, right: string): boolean {
+  return pathKey(left) === pathKey(right);
+}
+
+function pathKey(path: string): string {
+  const resolved = resolve(path);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function comparePathNames(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+  if (left > right) {
+    return 1;
+  }
+  return 0;
+}
+
+function decodeUtf8WithReplacement(buffer: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+}
+
+function assertPositiveInteger(value: number, message: string): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(message);
+  }
+}
