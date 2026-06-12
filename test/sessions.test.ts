@@ -11,19 +11,89 @@ import {
   createUserMessageFromContent,
   createUserMessageFromText,
   getProjectSessionDir,
-  loadLatestSession,
-  loadSessionById,
-  listRecentSessions,
   QueryEngine,
-  saveQueryEngineSnapshot,
-  saveSessionSnapshot,
-  exportSessionTranscript,
   type ApiClient,
   type ApiMessageRequest,
   type ApiStreamEvent,
+  type ConversationMessage,
   type StreamEvent,
   type UsageSnapshot
 } from "../src/index.js";
+
+interface SessionStorageTestOptions {
+  readonly env?: Readonly<Record<string, string | undefined>>;
+  readonly homeDir?: string;
+}
+
+interface SaveSessionSnapshotTestArgs extends SessionStorageTestOptions {
+  readonly cwd: string;
+  readonly sessionId?: string;
+  readonly model: string;
+  readonly systemPrompt: string;
+  readonly messages: readonly ConversationMessage[];
+  readonly usage?: UsageSnapshot;
+  readonly toolMetadata?: Readonly<Record<string, unknown>>;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+}
+
+interface SaveQueryEngineSnapshotTestArgs extends SessionStorageTestOptions {
+  readonly engine: QueryEngine;
+  readonly sessionId?: string;
+  readonly usage?: UsageSnapshot;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+}
+
+interface ExportSessionTranscriptTestArgs extends SessionStorageTestOptions {
+  readonly cwd: string;
+  readonly sessionId: string;
+}
+
+interface SessionSnapshotForTest {
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly model: string;
+  readonly messages: readonly ConversationMessage[];
+  readonly usage?: UsageSnapshot;
+  readonly toolMetadata: Readonly<Record<string, unknown>>;
+  readonly summary: string;
+  readonly messageCount: number;
+  readonly path: string;
+}
+
+interface SessionSummaryForTest {
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly model: string;
+  readonly summary: string;
+  readonly messageCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly path: string;
+}
+
+interface SessionApiExports extends Record<string, unknown> {
+  readonly FileSessionBackend: unknown;
+  readonly saveSessionSnapshot: (args: SaveSessionSnapshotTestArgs) => Promise<SessionSnapshotForTest>;
+  readonly loadLatestSession: (
+    cwd: string,
+    options?: SessionStorageTestOptions
+  ) => Promise<SessionSnapshotForTest | undefined>;
+  readonly loadSessionById: (
+    cwd: string,
+    sessionId: string,
+    options?: SessionStorageTestOptions
+  ) => Promise<SessionSnapshotForTest | undefined>;
+  readonly listRecentSessions: (
+    cwd: string,
+    options?: SessionStorageTestOptions & { readonly limit?: number }
+  ) => Promise<readonly SessionSummaryForTest[]>;
+  readonly exportSessionTranscript: (args: ExportSessionTranscriptTestArgs) => Promise<string>;
+  readonly saveQueryEngineSnapshot: (
+    args: SaveQueryEngineSnapshotTestArgs
+  ) => Promise<SessionSnapshotForTest>;
+}
 
 class ScriptedApiClient implements ApiClient {
   public readonly requests: ApiMessageRequest[] = [];
@@ -66,8 +136,19 @@ async function collectEvents(iterable: AsyncIterable<StreamEvent>): Promise<read
   return events;
 }
 
+async function loadRootSessionExports(): Promise<SessionApiExports> {
+  const modulePath = "../src/index.js" as string;
+  return (await import(modulePath)) as unknown as SessionApiExports;
+}
+
+async function loadSessionBarrelExports(): Promise<SessionApiExports> {
+  const modulePath = "../src/sessions/index.js" as string;
+  return (await import(modulePath)) as unknown as SessionApiExports;
+}
+
 describe("session snapshot filesystem persistence", () => {
   it("saves JSONL as the source of truth and latest.json as a pointer", async () => {
+    const { saveSessionSnapshot } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
     const usage: UsageSnapshot = { inputTokens: 3, outputTokens: 5 };
     const messages = [
@@ -153,6 +234,8 @@ describe("session snapshot filesystem persistence", () => {
   });
 
   it("loads latest and by id from JSONL", async () => {
+    const { loadLatestSession, loadSessionById, saveSessionSnapshot } =
+      await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
     const messages = [
       createUserMessageFromText("load me"),
@@ -189,6 +272,7 @@ describe("session snapshot filesystem persistence", () => {
   });
 
   it("lists recent sessions newest first", async () => {
+    const { listRecentSessions, saveSessionSnapshot } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
 
     try {
@@ -235,6 +319,7 @@ describe("session snapshot filesystem persistence", () => {
   });
 
   it("exports transcript markdown from JSONL", async () => {
+    const { exportSessionTranscript, saveSessionSnapshot } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
 
     try {
@@ -289,6 +374,7 @@ describe("session snapshot filesystem persistence", () => {
   });
 
   it("returns undefined for missing latest and missing session id", async () => {
+    const { loadLatestSession, loadSessionById } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
 
     try {
@@ -300,6 +386,7 @@ describe("session snapshot filesystem persistence", () => {
   });
 
   it("throws clear errors for invalid ids and malformed direct loads", async () => {
+    const { loadSessionById, saveSessionSnapshot } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
 
     try {
@@ -330,6 +417,7 @@ describe("session snapshot filesystem persistence", () => {
   });
 
   it("persists a completed QueryEngine run through the helper", async () => {
+    const { saveQueryEngineSnapshot } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
     const client = new ScriptedApiClient([
       [
@@ -381,8 +469,8 @@ describe("session snapshot filesystem persistence", () => {
 
 describe("session public exports", () => {
   it("exports session APIs from the sessions barrel and package root", async () => {
-    const sessions = await import("../src/sessions/index.js");
-    const root = await import("../src/index.js");
+    const sessions = await loadSessionBarrelExports();
+    const root = await loadRootSessionExports();
 
     expectSessionExports(sessions);
     expectSessionExports(root);
