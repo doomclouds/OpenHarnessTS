@@ -431,3 +431,14 @@ describe("QueryEngine composition", () => {
     expect(client.requests[0]?.systemPrompt).toBe("Explicit prompt.");
   });
 });
+
+describe("QueryEngine root exports", () => {
+  it("exports the public facade and DeepSeek factory from the package root", async () => {
+    const root = await import("../src/index.js");
+
+    expect(root.QueryEngine).toBe(QueryEngine);
+    expect(typeof root.createDeepSeekQueryEngineFromEnv).toBe("function");
+    expect(typeof root.runQuery).toBe("function");
+    expect(typeof root.HarnessRuntime).toBe("function");
+  });
+});
