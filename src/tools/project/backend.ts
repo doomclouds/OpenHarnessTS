@@ -3,6 +3,8 @@ import { rgPath } from "@vscode/ripgrep";
 
 const defaultMaxOutputBytes = 10 * 1024 * 1024;
 
+type TerminationReason = "abort" | "output-limit" | "timeout";
+
 export interface RipgrepBackendRunOptions {
   readonly cwd: string;
   readonly timeoutMs: number;
@@ -35,8 +37,7 @@ export function createRipgrepBackend(): RipgrepBackend {
   return {
     run(args, options) {
       const startedAt = Date.now();
-      let timedOut = false;
-      let aborted = false;
+      let terminationReason: TerminationReason | undefined;
       let settled = false;
       let timeout: NodeJS.Timeout | undefined;
       const maxStdoutBytes = normalizeMaxBytes(options.maxStdoutBytes);
@@ -55,11 +56,16 @@ export function createRipgrepBackend(): RipgrepBackend {
         }
       };
 
-      const stdout = createOutputCollector(maxStdoutBytes, () => {
+      const requestTermination = (reason: TerminationReason): void => {
+        terminationReason ??= reason;
         killChild();
+      };
+
+      const stdout = createOutputCollector(maxStdoutBytes, () => {
+        requestTermination("output-limit");
       });
       const stderr = createOutputCollector(maxStderrBytes, () => {
-        killChild();
+        requestTermination("output-limit");
       });
 
       child.stdout?.on("data", (chunk: Buffer | string) => {
@@ -71,20 +77,8 @@ export function createRipgrepBackend(): RipgrepBackend {
       });
 
       const onAbort = (): void => {
-        aborted = true;
-        killChild();
+        requestTermination("abort");
       };
-
-      if (options.signal?.aborted === true) {
-        onAbort();
-      } else {
-        options.signal?.addEventListener("abort", onAbort, { once: true });
-      }
-
-      timeout = setTimeout(() => {
-        timedOut = true;
-        killChild();
-      }, options.timeoutMs);
 
       return new Promise<RipgrepBackendResult>((resolve) => {
         const finish = (
@@ -105,8 +99,8 @@ export function createRipgrepBackend(): RipgrepBackend {
             stderr: stderr.toString(),
             exitCode,
             signal,
-            timedOut,
-            aborted,
+            timedOut: terminationReason === "timeout",
+            aborted: terminationReason === "abort",
             stdoutTruncated: stdout.truncated,
             stderrTruncated: stderr.truncated,
             durationMs: Date.now() - startedAt
@@ -119,6 +113,20 @@ export function createRipgrepBackend(): RipgrepBackend {
         });
 
         child.on("close", finish);
+
+        if (options.signal?.aborted === true) {
+          onAbort();
+        } else {
+          options.signal?.addEventListener("abort", onAbort, { once: true });
+        }
+
+        if (options.timeoutMs <= 0) {
+          requestTermination("timeout");
+        } else {
+          timeout = setTimeout(() => {
+            requestTermination("timeout");
+          }, options.timeoutMs);
+        }
       });
     }
   };

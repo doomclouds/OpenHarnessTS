@@ -177,13 +177,17 @@ describe("ripgrep backend", () => {
     }
   });
 
-  it("kills ripgrep and marks timeout metadata when timeout elapses", async () => {
+  it("kills ripgrep immediately when timeout is not positive", async () => {
     const cwd = await makeTempProject("openharness-rg-timeout-kill-");
     try {
-      writeFileSync(join(cwd, "timeout.txt"), "timeout\n", "utf8");
+      writeFileSync(
+        join(cwd, "many-timeout-matches.txt"),
+        "timeout\n".repeat(250_000),
+        "utf8"
+      );
 
       const result = await createRipgrepBackend().run(
-        ["--files", "--color", "never", "."],
+        ["--color", "never", "timeout", "."],
         { cwd, timeoutMs: 0 }
       );
 
@@ -191,6 +195,26 @@ describe("ripgrep backend", () => {
       expect(result.aborted).toBe(false);
       expect(result.stdoutTruncated).toBe(false);
       expect(result.stderrTruncated).toBe(false);
+      expectKilledByBackend(result);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("keeps the first terminal reason when abort and timeout both happen", async () => {
+    const cwd = await makeTempProject("openharness-rg-first-terminal-");
+    try {
+      writeFileSync(join(cwd, "delta.txt"), "delta\n", "utf8");
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await createRipgrepBackend().run(
+        ["--files", "--color", "never", "."],
+        { cwd, timeoutMs: 0, signal: controller.signal }
+      );
+
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(false);
       expectKilledByBackend(result);
     } finally {
       await removeTempProject(cwd);
