@@ -2,18 +2,21 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  mkdirSync,
   mkdtempSync,
   rmSync,
   writeFileSync
 } from "node:fs";
 import { release as osRelease, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildRuntimePrompt,
   buildSystemPrompt,
   collectEnvironmentInfo,
   formatEnvironmentSection,
-  type EnvironmentInfo
+  type EnvironmentInfo,
+  type ProjectInstructions
 } from "../src/prompts/index.js";
 import {
   buildSystemPrompt as buildSystemPromptFromRoot,
@@ -34,6 +37,40 @@ const environment: EnvironmentInfo = {
   gitBranch: "master",
   hostname: "dev-box"
 };
+
+function makeTempDirectory(prefix: string): string {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
+function writeText(path: string, content: string): void {
+  writeFileSync(path, content, "utf8");
+}
+
+function createInjectedProjectInstructions(): ProjectInstructions {
+  const path = "C:/WorkSpace/ResearchProjects/OpenHarnessTS/AGENTS.md";
+
+  return {
+    cwd: environment.cwd,
+    files: [
+      {
+        path,
+        kind: "agents",
+        directory: environment.cwd,
+        order: 0,
+        content: "Use structured plans.",
+        originalCharCount: 21,
+        loadedCharCount: 21,
+        truncated: false
+      }
+    ],
+    section: `# Project Instructions
+
+## ${path}
+\`\`\`md
+Use structured plans.
+\`\`\``
+  };
+}
 
 describe("buildSystemPrompt", () => {
   it("builds the default OpenHarness prompt with an environment section", () => {
@@ -188,6 +225,228 @@ describe("custom system prompts", () => {
     expect(prompt).toContain("# Environment");
     expect(prompt).toContain("- Node executable: C:/Program Files/nodejs/node.exe");
     expect(prompt).not.toContain("open-source AI coding assistant runtime");
+  });
+});
+
+describe("buildRuntimePrompt", () => {
+  it("builds a runtime prompt with base, environment, default permission mode, and injected instructions", () => {
+    const projectInstructions = createInjectedProjectInstructions();
+    const result = buildRuntimePrompt({
+      cwd: environment.cwd,
+      environment,
+      projectInstructions
+    });
+
+    expect(result.systemPrompt).toContain("You are OpenHarness");
+    expect(result.systemPrompt).toContain("# Environment");
+    expect(result.permissionMode).toBe("default");
+    expect(result.environment).toBe(environment);
+    expect(result.projectInstructions).toBe(projectInstructions);
+    expect(result.prompt).toContain("You are OpenHarness");
+    expect(result.prompt).toContain("# Environment");
+    expect(result.prompt).toContain("# Permission Mode");
+    expect(result.prompt).toContain("- Current mode: default");
+    expect(result.prompt).toContain("- Read-only tools may run automatically.");
+    expect(result.prompt).toContain(
+      "- Mutating tools require confirmation or may be blocked by the runtime."
+    );
+    expect(result.prompt).toContain("# Project Instructions");
+    expect(result.prompt.indexOf("# Environment")).toBeLessThan(
+      result.prompt.indexOf("# Permission Mode")
+    );
+    expect(result.prompt.indexOf("# Permission Mode")).toBeLessThan(
+      result.prompt.indexOf("# Project Instructions")
+    );
+  });
+
+  it("loads project instructions from cwd when none are injected", () => {
+    const root = makeTempDirectory("openharness-runtime-prompt-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "Use repository instructions.");
+
+      const result = buildRuntimePrompt({
+        cwd: repo,
+        environment: {
+          ...environment,
+          cwd: resolve(repo),
+          isGitRepo: false,
+          gitBranch: undefined
+        },
+        instructionOptions: {
+          stopAt: repo
+        }
+      });
+
+      expect(result.projectInstructions?.cwd).toBe(resolve(repo));
+      expect(result.projectInstructions?.files).toHaveLength(1);
+      expect(result.projectInstructions?.files[0]?.path).toBe(
+        resolve(repo, "AGENTS.md")
+      );
+      expect(result.prompt).toContain("# Project Instructions");
+      expect(result.prompt).toContain("Use repository instructions.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not load project instructions when loading is disabled", () => {
+    const root = makeTempDirectory("openharness-runtime-prompt-disabled-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "Should not be loaded.");
+
+      const result = buildRuntimePrompt({
+        cwd: repo,
+        environment: {
+          ...environment,
+          cwd: resolve(repo),
+          isGitRepo: false,
+          gitBranch: undefined
+        },
+        loadProjectInstructions: false,
+        instructionOptions: {
+          stopAt: repo
+        }
+      });
+
+      expect(result.projectInstructions).toBeUndefined();
+      expect(result.prompt).not.toContain("# Project Instructions");
+      expect(result.prompt).not.toContain("Should not be loaded.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("supports customSystemPrompt as a base override while keeping runtime sections", () => {
+    const projectInstructions = createInjectedProjectInstructions();
+    const result = buildRuntimePrompt({
+      cwd: environment.cwd,
+      environment,
+      customSystemPrompt: "Custom base prompt.",
+      projectInstructions
+    });
+
+    expect(result.systemPrompt).toContain("Custom base prompt.");
+    expect(result.systemPrompt).toContain("# Environment");
+    expect(result.systemPrompt).not.toContain("open-source AI coding assistant runtime");
+    expect(result.prompt).toContain("Custom base prompt.");
+    expect(result.prompt).toContain("# Permission Mode");
+    expect(result.prompt).toContain("# Project Instructions");
+  });
+
+  it("supports systemPrompt as a full override while keeping metadata", () => {
+    const projectInstructions = createInjectedProjectInstructions();
+    const result = buildRuntimePrompt({
+      cwd: environment.cwd,
+      environment,
+      systemPrompt: "Exact runtime prompt.",
+      projectInstructions
+    });
+
+    expect(result.prompt).toBe("Exact runtime prompt.");
+    expect(result.systemPrompt).toBe("Exact runtime prompt.");
+    expect(result.permissionMode).toBe("default");
+    expect(result.environment).toBe(environment);
+    expect(result.projectInstructions).toBe(projectInstructions);
+    expect(result.prompt).not.toContain("# Environment");
+    expect(result.prompt).not.toContain("# Permission Mode");
+    expect(result.prompt).not.toContain("# Project Instructions");
+  });
+
+  it("rejects conflicting system prompt override modes", () => {
+    expect(() =>
+      buildRuntimePrompt({
+        cwd: environment.cwd,
+        environment,
+        systemPrompt: "Exact runtime prompt.",
+        customSystemPrompt: "Custom base prompt."
+      })
+    ).toThrow("cannot include both systemPrompt and customSystemPrompt");
+  });
+
+  it("formats plan and full_auto permission modes", () => {
+    const planResult = buildRuntimePrompt({
+      cwd: environment.cwd,
+      environment,
+      permissionMode: "plan",
+      loadProjectInstructions: false
+    });
+    const fullAutoResult = buildRuntimePrompt({
+      cwd: environment.cwd,
+      environment,
+      permissionMode: "full_auto",
+      loadProjectInstructions: false
+    });
+
+    expect(planResult.prompt).toContain("# Permission Mode");
+    expect(planResult.prompt).toContain("- Current mode: plan");
+    expect(planResult.prompt).toContain("- Mutating tools are blocked by the runtime.");
+    expect(fullAutoResult.prompt).toContain("# Permission Mode");
+    expect(fullAutoResult.prompt).toContain("- Current mode: full_auto");
+    expect(fullAutoResult.prompt).toContain(
+      "- Mutating tools may run automatically unless blocked by safety rules."
+    );
+  });
+
+  it("returns no projectInstructions when no instruction files exist", () => {
+    const root = makeTempDirectory("openharness-runtime-prompt-empty-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+
+      const result = buildRuntimePrompt({
+        cwd: repo,
+        environment: {
+          ...environment,
+          cwd: resolve(repo),
+          isGitRepo: false,
+          gitBranch: undefined
+        },
+        instructionOptions: {
+          stopAt: repo
+        }
+      });
+
+      expect(result.projectInstructions).toBeUndefined();
+      expect(result.prompt).not.toContain("# Project Instructions");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates project instruction loading errors", () => {
+    expect(() =>
+      buildRuntimePrompt({
+        cwd: environment.cwd,
+        environment,
+        instructionOptions: {
+          maxCharsPerFile: 0
+        }
+      })
+    ).toThrow("maxCharsPerFile must be a positive integer.");
+  });
+
+  it("rejects invalid cwd inputs", () => {
+    expect(() =>
+      buildRuntimePrompt({
+        cwd: "",
+        environment,
+        loadProjectInstructions: false
+      })
+    ).toThrow("cwd must be a non-empty path.");
+    expect(() =>
+      buildRuntimePrompt({
+        cwd: new URL("https://example.com/repo"),
+        environment,
+        loadProjectInstructions: false
+      })
+    ).toThrow("cwd URL must use the file: protocol.");
   });
 });
 
