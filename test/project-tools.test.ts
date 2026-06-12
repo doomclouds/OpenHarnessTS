@@ -1270,6 +1270,96 @@ describe("glob project tool", () => {
     }
   });
 
+  it("falls back to tinyglobby when the ripgrep backend cannot run", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-spawn-fallback-");
+    try {
+      mkdirSync(join(cwd, ".hidden"));
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "visible.ts"), "visible\n", "utf8");
+      writeFileSync(join(cwd, "visible.txt"), "visible\n", "utf8");
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          exitCode: null,
+          signal: null,
+          stderr: "spawn ENOENT"
+        })
+      );
+
+      const result = await createGlobTool({ backend }).execute(
+        { pattern: "**/*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".hidden/dot.ts\nvisible.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          root: cwd,
+          pattern: "**/*.ts",
+          matchedFileCount: 2,
+          truncated: false,
+          fallbackReason: "spawn ENOENT"
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("does not fall back when ripgrep times out or is aborted", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-terminal-errors-");
+    try {
+      const timedOutBackend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          exitCode: null,
+          signal: "SIGTERM",
+          timedOut: true
+        })
+      );
+      const abortedBackend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          exitCode: null,
+          signal: "SIGTERM",
+          aborted: true
+        })
+      );
+
+      const timedOut = await createGlobTool({
+        backend: timedOutBackend,
+        timeoutMs: 123
+      }).execute({ pattern: "*.ts" }, { cwd, metadata: {} });
+      const aborted = await createGlobTool({ backend: abortedBackend }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(timedOut).toMatchObject({
+        output: "glob timed out after 123ms",
+        isError: true,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          exitCode: null,
+          signal: "SIGTERM"
+        }
+      });
+      expect(aborted).toMatchObject({
+        output: "glob was aborted",
+        isError: true,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          exitCode: null,
+          signal: "SIGTERM"
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("treats concrete ripgrep failures as errors even when stdout is truncated", async () => {
     const cwd = await makeTempProject("openharness-glob-rg-truncated-error-");
     try {

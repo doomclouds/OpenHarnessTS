@@ -35,6 +35,8 @@ export interface CreateGlobToolOptions {
 
 interface GlobMatchResult {
   readonly paths: readonly string[];
+  readonly backend: "ripgrep" | "fallback";
+  readonly fallbackReason?: string;
   readonly backendOutputTruncated: boolean;
   readonly stdoutTruncated?: boolean;
   readonly stderrTruncated?: boolean;
@@ -120,8 +122,6 @@ export function createGlobTool(
           );
         }
 
-        const backendName =
-          options.disableRipgrep === true ? "fallback" : "ripgrep";
         const matchResult =
           options.disableRipgrep === true
             ? await fallbackGlob(root, globInput.pattern, globInput.limit + 1)
@@ -143,12 +143,15 @@ export function createGlobTool(
             returnedPaths.length === 0 ? "(no matches)" : returnedPaths.join("\n"),
           metadata: {
             tool: "glob",
-            backend: backendName,
+            backend: matchResult.backend,
             root,
             pattern: globInput.pattern,
             matchedFileCount: returnedPaths.length,
             truncated,
             durationMs: Date.now() - startedAt,
+            ...(matchResult.fallbackReason === undefined
+              ? {}
+              : { fallbackReason: matchResult.fallbackReason }),
             ...(matchResult.stdoutTruncated === undefined
               ? {}
               : { stdoutTruncated: matchResult.stdoutTruncated }),
@@ -270,10 +273,15 @@ async function ripgrepGlob(
           dropIncompleteFinalLine: result.stdoutTruncated
         })
       ).slice(0, limit),
+      backend: "ripgrep",
       backendOutputTruncated: result.stdoutTruncated,
       stdoutTruncated: result.stdoutTruncated,
       stderrTruncated: result.stderrTruncated
     };
+  }
+
+  if (isRipgrepBackendCannotRun(result)) {
+    return await fallbackGlob(root, pattern, limit, result.stderr.trim());
   }
 
   throw createRipgrepError(result.stderr.trim() || "ripgrep glob failed", result);
@@ -299,7 +307,8 @@ function isRipgrepFileListSuccess(result: RipgrepBackendResult): boolean {
 async function fallbackGlob(
   root: string,
   pattern: string,
-  limit: number
+  limit: number,
+  fallbackReason?: string
 ): Promise<GlobMatchResult> {
   const paths = await tinyGlob(pattern, {
     cwd: root,
@@ -310,6 +319,8 @@ async function fallbackGlob(
 
   return {
     paths: (await normalizeMatchedPathList(root, paths)).slice(0, limit),
+    backend: "fallback",
+    ...(fallbackReason === undefined ? {} : { fallbackReason }),
     backendOutputTruncated: false
   };
 }
@@ -442,6 +453,25 @@ function isInsideRoot(root: string, projectPath: string): boolean {
 
 function splitPathSegments(projectPath: string): string[] {
   return projectPath.split(/[\\/]+/u).filter((segment) => segment.length > 0);
+}
+
+function isRipgrepBackendCannotRun(result: RipgrepBackendResult): boolean {
+  const stderr = result.stderr.trim();
+
+  return (
+    result.exitCode === null &&
+    result.signal === null &&
+    !result.timedOut &&
+    !result.aborted &&
+    result.stdout.length === 0 &&
+    !result.stdoutTruncated &&
+    !result.stderrTruncated &&
+    isSpawnLikeRipgrepFailure(stderr)
+  );
+}
+
+function isSpawnLikeRipgrepFailure(stderr: string): boolean {
+  return /^spawn\b/u.test(stderr);
 }
 
 function createRipgrepError(
