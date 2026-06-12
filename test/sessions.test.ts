@@ -375,16 +375,22 @@ describe("session snapshot filesystem persistence", () => {
   });
 });
 
-describe("session root exports", () => {
-  it("exports session APIs from the package root", async () => {
+describe("session public exports", () => {
+  it("exports session APIs from the sessions barrel and package root", async () => {
+    const sessions = await import("../src/sessions/index.js");
     const root = await import("../src/index.js");
 
-    expect(typeof root.FileSessionBackend).toBe("function");
-    expect(typeof root.saveSessionSnapshot).toBe("function");
-    expect(typeof root.loadLatestSession).toBe("function");
-    expect(typeof root.loadSessionById).toBe("function");
-    expect(typeof root.listRecentSessions).toBe("function");
-    expect(typeof root.exportSessionTranscript).toBe("function");
-    expect(typeof root.saveQueryEngineSnapshot).toBe("function");
+    expectSessionExports(sessions);
+    expectSessionExports(root);
   });
 });
+
+function expectSessionExports(exports: Record<string, unknown>): void {
+  expect(typeof exports.FileSessionBackend).toBe("function");
+  expect(typeof exports.saveSessionSnapshot).toBe("function");
+  expect(typeof exports.loadLatestSession).toBe("function");
+  expect(typeof exports.loadSessionById).toBe("function");
+  expect(typeof exports.listRecentSessions).toBe("function");
+  expect(typeof exports.exportSessionTranscript).toBe("function");
+  expect(typeof exports.saveQueryEngineSnapshot).toBe("function");
+}
