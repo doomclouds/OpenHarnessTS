@@ -5,6 +5,7 @@ import { resolveExistingProjectPath } from "./paths.js";
 
 const defaultLimit = 200;
 const maxLimit = 2000;
+const maxReadFileBytes = 1024 * 1024;
 
 export interface ReadFileToolInput {
   readonly path: string;
@@ -30,13 +31,13 @@ export function createReadFileTool(): ToolDefinition {
           description: "Project-relative path to read."
         },
         offset: {
-          type: "number",
+          type: "integer",
           description: "Zero-based starting line.",
           default: 0,
           minimum: 0
         },
         limit: {
-          type: "number",
+          type: "integer",
           description: "Maximum number of lines to return.",
           default: defaultLimit,
           minimum: 1,
@@ -84,6 +85,18 @@ export function createReadFileTool(): ToolDefinition {
             tool: "read_file",
             resolvedPath
           });
+        }
+
+        if (fileStat.size > maxReadFileBytes) {
+          return createToolErrorResult(
+            `File exceeds read_file size limit: ${resolvedPath}`,
+            {
+              tool: "read_file",
+              resolvedPath,
+              fileSizeBytes: fileStat.size,
+              maxBytes: maxReadFileBytes
+            }
+          );
         }
 
         const buffer = await readFile(resolvedPath);

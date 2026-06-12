@@ -16,6 +16,7 @@ import {
   resolveProjectPath,
   ToolRegistry
 } from "../src/tools/index.js";
+import type { ReadFileToolInput } from "../src/tools/index.js";
 
 async function makeTempProject(prefix: string): Promise<string> {
   return await mkdtemp(join(tmpdir(), prefix));
@@ -449,6 +450,24 @@ describe("ripgrep backend", () => {
 });
 
 describe("read_file project tool", () => {
+  it("publishes integer offset and limit schema through the registry", () => {
+    const registry = new ToolRegistry();
+    registry.register(createReadFileTool());
+
+    expect(registry.toApiSchema()).toEqual([
+      expect.objectContaining({
+        name: "read_file",
+        input_schema: expect.objectContaining({
+          additionalProperties: false,
+          properties: expect.objectContaining({
+            offset: expect.objectContaining({ type: "integer" }),
+            limit: expect.objectContaining({ type: "integer" })
+          })
+        })
+      })
+    ]);
+  });
+
   it("reads a UTF-8 file with line numbers", async () => {
     const cwd = await makeTempProject("openharness-read-file-");
     try {
@@ -507,6 +526,102 @@ describe("read_file project tool", () => {
     }
   });
 
+  it("directly executes a successful read", async () => {
+    const cwd = await makeTempProject("openharness-read-file-direct-");
+    try {
+      writeFileSync(join(cwd, "direct.txt"), "direct\n", "utf8");
+
+      const result = await createReadFileTool().execute(
+        { path: "direct.txt" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "     1\tdirect",
+        isError: false,
+        metadata: {
+          tool: "read_file",
+          offset: 0,
+          limit: 200,
+          lineCount: 1,
+          returnedLineCount: 1,
+          truncated: false,
+          binary: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("directly rejects invalid input", async () => {
+    const cwd = await makeTempProject("openharness-read-file-direct-invalid-");
+    try {
+      const result = await createReadFileTool().execute(
+        null as unknown as ReadFileToolInput,
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: expect.stringContaining("Invalid input for read_file"),
+        isError: true,
+        metadata: { tool: "read_file" }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("handles empty files, offsets beyond EOF, and files without trailing newline", async () => {
+    const cwd = await makeTempProject("openharness-read-file-boundaries-");
+    try {
+      const emptyPath = join(cwd, "empty.txt");
+      const noTrailingNewlinePath = join(cwd, "no-newline.txt");
+      writeFileSync(emptyPath, "", "utf8");
+      writeFileSync(noTrailingNewlinePath, "last line", "utf8");
+
+      const empty = await executeReadFileTool(cwd, { path: "empty.txt" });
+      expect(empty).toMatchObject({
+        output: `(no content in selected range for ${emptyPath})`,
+        isError: false,
+        metadata: {
+          lineCount: 0,
+          returnedLineCount: 0,
+          truncated: false
+        }
+      });
+
+      const beyondEof = await executeReadFileTool(cwd, {
+        path: "no-newline.txt",
+        offset: 2
+      });
+      expect(beyondEof).toMatchObject({
+        output: `(no content in selected range for ${noTrailingNewlinePath})`,
+        isError: false,
+        metadata: {
+          lineCount: 1,
+          returnedLineCount: 0,
+          truncated: false
+        }
+      });
+
+      const noTrailingNewline = await executeReadFileTool(cwd, {
+        path: "no-newline.txt"
+      });
+      expect(noTrailingNewline).toMatchObject({
+        output: "     1\tlast line",
+        isError: false,
+        metadata: {
+          lineCount: 1,
+          returnedLineCount: 1,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("rejects missing files, directories, binary files, and path escapes", async () => {
     const cwd = await makeTempProject("openharness-read-file-errors-");
     try {
@@ -535,6 +650,29 @@ describe("read_file project tool", () => {
       expect(escaped.isError).toBe(true);
       expect(escaped.output).toContain("Path escapes project cwd");
       expect(escaped.metadata).toMatchObject({ tool: "read_file" });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects files above the read size limit before reading content", async () => {
+    const cwd = await makeTempProject("openharness-read-file-large-");
+    try {
+      const largePath = join(cwd, "large.txt");
+      writeFileSync(largePath, Buffer.alloc(1024 * 1024 + 1, 0x61));
+
+      const result = await executeReadFileTool(cwd, { path: "large.txt" });
+
+      expect(result).toMatchObject({
+        output: expect.stringContaining("exceeds read_file size limit"),
+        isError: true,
+        metadata: {
+          tool: "read_file",
+          resolvedPath: largePath,
+          fileSizeBytes: 1024 * 1024 + 1,
+          maxBytes: 1024 * 1024
+        }
+      });
     } finally {
       await removeTempProject(cwd);
     }
