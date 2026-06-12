@@ -134,7 +134,16 @@ export function reconstructSessionSnapshot(
   }
 
   const summary = summaryRecord?.summary ?? deriveSessionSummary(messages);
-  const messageCount = summaryRecord?.messageCount ?? messages.length;
+  if (
+    summaryRecord !== undefined &&
+    summaryRecord.messageCount !== messages.length
+  ) {
+    throw new Error(
+      `Session JSONL ${formatPath(path)}summary messageCount ${summaryRecord.messageCount} does not match actual message count ${messages.length}.`
+    );
+  }
+
+  const messageCount = messages.length;
   const updatedAt = summaryRecord?.updatedAt ?? start.createdAt;
 
   return {
@@ -199,15 +208,10 @@ function parseSessionMessageRecord(
   lineNumber: number,
   path: string
 ): SessionMessageRecord {
-  const message = value.message;
-  if (!isRecord(message)) {
-    throwInvalidRecord(path, lineNumber, "message is required.");
-  }
-
   return {
     type: "message",
     sessionId: readString(value, "sessionId", lineNumber, path),
-    message: message as unknown as SessionMessageRecord["message"]
+    message: parseConversationMessage(value.message, lineNumber, path)
   };
 }
 
@@ -216,15 +220,150 @@ function parseSessionUsageRecord(
   lineNumber: number,
   path: string
 ): SessionUsageRecord {
-  const usage = value.usage;
-  if (!isRecord(usage)) {
-    throwInvalidRecord(path, lineNumber, "usage is required.");
-  }
-
   return {
     type: "usage",
     sessionId: readString(value, "sessionId", lineNumber, path),
-    usage: usage as SessionUsageRecord["usage"]
+    usage: parseUsageSnapshot(value.usage, lineNumber, path)
+  };
+}
+
+function parseConversationMessage(
+  value: unknown,
+  lineNumber: number,
+  path: string
+): SessionMessageRecord["message"] {
+  if (!isRecord(value)) {
+    throwInvalidRecord(path, lineNumber, "message is required.");
+  }
+
+  if (value.role !== "user" && value.role !== "assistant") {
+    throwInvalidRecord(path, lineNumber, "message.role must be user or assistant.");
+  }
+
+  if (!Array.isArray(value.content)) {
+    throwInvalidRecord(path, lineNumber, "message.content must be an array.");
+  }
+
+  for (const block of value.content) {
+    validateContentBlock(block, lineNumber, path);
+  }
+
+  if (
+    value.reasoningContent !== undefined &&
+    typeof value.reasoningContent !== "string"
+  ) {
+    throwInvalidRecord(path, lineNumber, "message.reasoningContent must be a string.");
+  }
+
+  return value as unknown as SessionMessageRecord["message"];
+}
+
+function validateContentBlock(
+  value: unknown,
+  lineNumber: number,
+  path: string
+): void {
+  if (!isRecord(value) || typeof value.type !== "string") {
+    throwInvalidRecord(path, lineNumber, "content block type is required.");
+  }
+
+  switch (value.type) {
+    case "text":
+      if (typeof value.text !== "string") {
+        throwInvalidRecord(path, lineNumber, "text block text must be a string.");
+      }
+      return;
+    case "tool_use":
+      validateToolUseBlock(value, lineNumber, path);
+      return;
+    case "tool_result":
+      validateToolResultBlock(value, lineNumber, path);
+      return;
+    case "image":
+      if (!isRecord(value.source)) {
+        throwInvalidRecord(path, lineNumber, "image block source must be an object.");
+      }
+      return;
+    default:
+      throwInvalidRecord(
+        path,
+        lineNumber,
+        `unknown content block type ${value.type}.`
+      );
+  }
+}
+
+function validateToolUseBlock(
+  value: Record<string, unknown>,
+  lineNumber: number,
+  path: string
+): void {
+  if (typeof value.id !== "string") {
+    throwInvalidRecord(path, lineNumber, "tool_use block id must be a string.");
+  }
+  if (typeof value.name !== "string") {
+    throwInvalidRecord(path, lineNumber, "tool_use block name must be a string.");
+  }
+  if (!isRecord(value.input)) {
+    throwInvalidRecord(path, lineNumber, "tool_use block input must be an object.");
+  }
+}
+
+function validateToolResultBlock(
+  value: Record<string, unknown>,
+  lineNumber: number,
+  path: string
+): void {
+  if (typeof value.toolUseId !== "string") {
+    throwInvalidRecord(
+      path,
+      lineNumber,
+      "tool_result block toolUseId must be a string."
+    );
+  }
+  if (typeof value.content !== "string") {
+    throwInvalidRecord(path, lineNumber, "tool_result block content must be a string.");
+  }
+  if (typeof value.isError !== "boolean") {
+    throwInvalidRecord(path, lineNumber, "tool_result block isError must be a boolean.");
+  }
+  if (!isRecord(value.metadata)) {
+    throwInvalidRecord(path, lineNumber, "tool_result block metadata must be an object.");
+  }
+}
+
+function parseUsageSnapshot(
+  value: unknown,
+  lineNumber: number,
+  path: string
+): SessionUsageRecord["usage"] {
+  if (!isRecord(value)) {
+    throwInvalidRecord(path, lineNumber, "usage is required.");
+  }
+
+  const inputTokens = readOptionalFiniteNumber(value, "inputTokens", lineNumber, path);
+  const outputTokens = readOptionalFiniteNumber(value, "outputTokens", lineNumber, path);
+  const cacheReadInputTokens = readOptionalFiniteNumber(
+    value,
+    "cacheReadInputTokens",
+    lineNumber,
+    path
+  );
+  const cacheCreationInputTokens = readOptionalFiniteNumber(
+    value,
+    "cacheCreationInputTokens",
+    lineNumber,
+    path
+  );
+
+  return {
+    ...(inputTokens === undefined ? {} : { inputTokens }),
+    ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
+    ...(cacheCreationInputTokens === undefined
+      ? {}
+      : { cacheCreationInputTokens }),
+    ...(Object.hasOwn(value, "raw") ? { raw: value.raw } : {})
   };
 }
 
@@ -278,6 +417,24 @@ function readString(
   if (typeof field !== "string") {
     throwInvalidRecord(path, lineNumber, `${key} must be a string.`);
   }
+  return field;
+}
+
+function readOptionalFiniteNumber(
+  value: Record<string, unknown>,
+  key: string,
+  lineNumber: number,
+  path: string
+): number | undefined {
+  const field = value[key];
+  if (field === undefined) {
+    return undefined;
+  }
+
+  if (typeof field !== "number" || !Number.isFinite(field)) {
+    throwInvalidRecord(path, lineNumber, `${key} must be a finite number.`);
+  }
+
   return field;
 }
 

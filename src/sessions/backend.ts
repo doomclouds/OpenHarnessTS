@@ -167,13 +167,23 @@ export function deriveSessionSummary(
 }
 
 export function sanitizeJsonValue(value: unknown): unknown {
+  return sanitizeJsonValueInner(value, new WeakSet<object>());
+}
+
+function sanitizeJsonValueInner(
+  value: unknown,
+  ancestors: WeakSet<object>
+): unknown {
   if (
     value === null ||
     typeof value === "string" ||
-    typeof value === "number" ||
     typeof value === "boolean"
   ) {
     return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : String(value);
   }
 
   if (value === undefined) {
@@ -181,19 +191,32 @@ export function sanitizeJsonValue(value: unknown): unknown {
   }
 
   if (Array.isArray(value)) {
-    return value
-      .map((item) => sanitizeJsonValue(item))
+    if (ancestors.has(value)) {
+      return "[Circular]";
+    }
+
+    ancestors.add(value);
+    const sanitized = value
+      .map((item) => sanitizeJsonValueInner(item, ancestors))
       .filter((item): item is Exclude<typeof item, undefined> => item !== undefined);
+    ancestors.delete(value);
+    return sanitized;
   }
 
   if (isPlainObject(value)) {
+    if (ancestors.has(value)) {
+      return "[Circular]";
+    }
+
+    ancestors.add(value);
     const sanitized: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      const sanitizedValue = sanitizeJsonValue(item);
+      const sanitizedValue = sanitizeJsonValueInner(item, ancestors);
       if (sanitizedValue !== undefined) {
         sanitized[key] = sanitizedValue;
       }
     }
+    ancestors.delete(value);
     return sanitized;
   }
 
