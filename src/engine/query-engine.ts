@@ -60,14 +60,38 @@ export class QueryEngine {
       throw new Error("QueryEngine apiClient is required.");
     }
 
+    if (options.toolRegistry !== undefined && options.tools !== undefined) {
+      throw new Error(
+        "QueryEngine options cannot include both toolRegistry and tools."
+      );
+    }
+
     this.apiClient = options.apiClient;
-    this.toolRegistry = new ToolRegistry();
-    this.permissionChecker = new PermissionChecker({
-      mode: options.permissionMode ?? "default"
-    });
+    this.toolRegistry =
+      options.toolRegistry === undefined
+        ? new ToolRegistry()
+        : stabilizeToolRegistryLookups(options.toolRegistry);
+    for (const tool of options.tools ?? []) {
+      this.toolRegistry.register(tool);
+    }
+    this.permissionChecker =
+      options.permissionChecker ??
+      new PermissionChecker({
+        mode: options.permissionMode ?? "default"
+      });
     this.cwd = options.cwd;
     this.model = options.model;
-    this.systemPrompt = options.systemPrompt ?? buildSystemPrompt({ cwd: options.cwd });
+    this.systemPrompt =
+      options.systemPrompt ??
+      buildSystemPrompt({
+        ...(options.customSystemPrompt === undefined
+          ? {}
+          : { customPrompt: options.customSystemPrompt }),
+        ...(options.environment === undefined
+          ? {}
+          : { environment: options.environment }),
+        cwd: options.cwd
+      });
 
     if (options.maxTokens !== undefined) {
       this.maxTokens = options.maxTokens;
@@ -77,6 +101,12 @@ export class QueryEngine {
     }
     if (options.signal !== undefined) {
       this.signal = options.signal;
+    }
+    if (options.hookExecutor !== undefined) {
+      this.hookExecutor = options.hookExecutor;
+    }
+    if (options.toolMetadata !== undefined) {
+      this.toolMetadata = options.toolMetadata;
     }
   }
 
@@ -125,7 +155,13 @@ export class QueryEngine {
       systemPrompt: this.systemPrompt,
       ...(this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens }),
       ...(this.maxTurns === undefined ? {} : { maxTurns: this.maxTurns }),
-      ...(this.signal === undefined ? {} : { signal: this.signal })
+      ...(this.signal === undefined ? {} : { signal: this.signal }),
+      ...(this.hookExecutor === undefined
+        ? {}
+        : { hookExecutor: this.hookExecutor }),
+      ...(this.toolMetadata === undefined
+        ? {}
+        : { toolMetadata: this.toolMetadata })
     };
   }
 
@@ -148,4 +184,27 @@ function assertNonEmptyString(value: unknown, message: string): asserts value is
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(message);
   }
+}
+
+function stabilizeToolRegistryLookups(registry: ToolRegistry): ToolRegistry {
+  const originalGetTool = registry.getTool.bind(registry);
+  const originalRegister = registry.register.bind(registry);
+  const cache = new Map<string, ToolDefinition | undefined>();
+
+  registry.getTool = (name: string): ToolDefinition | undefined => {
+    const key = name.trim();
+
+    if (!cache.has(key)) {
+      cache.set(key, originalGetTool(name));
+    }
+
+    return cache.get(key);
+  };
+
+  registry.register = (tool: ToolDefinition): void => {
+    originalRegister(tool);
+    cache.clear();
+  };
+
+  return registry;
 }
