@@ -138,6 +138,7 @@ export type {
   UserPromptSubmitHookPayload
 } from "./hooks/index.js";
 export {
+  buildRuntimePrompt,
   buildSystemPrompt,
   collectEnvironmentInfo,
   DEFAULT_SYSTEM_PROMPT,
@@ -147,6 +148,7 @@ export {
   loadProjectInstructions
 } from "./prompts/index.js";
 export type {
+  BuildRuntimePromptOptions,
   BuildSystemPromptOptions,
   CollectEnvironmentInfoOptions,
   DiscoverProjectInstructionsOptions,
@@ -155,7 +157,8 @@ export type {
   LoadProjectInstructionsOptions,
   ProjectInstructionFile,
   ProjectInstructionKind,
-  ProjectInstructions
+  ProjectInstructions,
+  RuntimePromptResult
 } from "./prompts/index.js";
 export {
   FileSessionBackend,
