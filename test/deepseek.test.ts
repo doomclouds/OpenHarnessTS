@@ -463,6 +463,7 @@ describe("DeepSeek QueryEngine factory", () => {
 
   it("creates a QueryEngine from DeepSeek env values without starting a request", () => {
     const sdkOptions: DeepSeekSdkOptions[] = [];
+    let requestCount = 0;
 
     vi.stubEnv("DEEPSEEK_API_KEY", "env-key");
     vi.stubEnv("DEEPSEEK_BASE_URL", "https://deepseek.example.com///");
@@ -473,10 +474,20 @@ describe("DeepSeek QueryEngine factory", () => {
       systemPrompt: "You are a test assistant.",
       createSdkClient(options) {
         sdkOptions.push(options);
-        return emptyFakeSdkClient();
+        return {
+          chat: {
+            completions: {
+              async create() {
+                requestCount += 1;
+                return (async function* () {})();
+              }
+            }
+          }
+        };
       }
     });
 
+    expect(requestCount).toBe(0);
     expect(engine).toBeInstanceOf(QueryEngine);
     expect(sdkOptions).toEqual([
       {
