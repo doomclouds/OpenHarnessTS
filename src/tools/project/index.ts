@@ -9,5 +9,6 @@ export type {
 export {
   normalizeProjectPath,
   relativeProjectPath,
+  resolveExistingProjectPath,
   resolveProjectPath
 } from "./paths.js";

@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 
 const pathEscapeMessage = "Path escapes project cwd";
@@ -36,4 +37,20 @@ export function relativeProjectPath(cwd: string, projectPath: string): string {
   const relativePath = path.relative(projectCwd, resolvedPath);
 
   return relativePath.length === 0 ? "." : normalizeProjectPath(relativePath);
+}
+
+export async function resolveExistingProjectPath(
+  cwd: string,
+  candidate = "."
+): Promise<string> {
+  const projectCwd = path.resolve(cwd);
+  const resolvedPath = resolveProjectPath(projectCwd, candidate);
+  const [realProjectCwd, realResolvedPath] = await Promise.all([
+    realpath(projectCwd),
+    realpath(resolvedPath)
+  ]);
+
+  assertInsideProject(realProjectCwd, realResolvedPath);
+
+  return realResolvedPath;
 }

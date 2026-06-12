@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
   createRipgrepBackend,
   normalizeProjectPath,
   relativeProjectPath,
+  resolveExistingProjectPath,
   resolveProjectPath
 } from "../src/tools/project/index.js";
 
@@ -51,6 +52,50 @@ describe("project tool path helpers", () => {
       await removeTempProject(cwd);
     }
   });
+
+  it("realpath-resolves existing paths inside the project", async () => {
+    const cwd = await makeTempProject("openharness-realpath-");
+    try {
+      writeFileSync(join(cwd, "inside.txt"), "inside\n", "utf8");
+
+      await expect(resolveExistingProjectPath(cwd, "inside.txt")).resolves.toBe(
+        resolve(cwd, "inside.txt")
+      );
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects symlink escapes when symlinks are supported", async () => {
+    const cwd = await makeTempProject("openharness-symlink-cwd-");
+    const outside = await makeTempProject("openharness-symlink-outside-");
+    try {
+      const outsideFile = join(outside, "outside.txt");
+      const linkPath = join(cwd, "outside-link.txt");
+      writeFileSync(outsideFile, "outside\n", "utf8");
+
+      try {
+        await symlink(outsideFile, linkPath, "file");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EPERM" || error.code === "EACCES")
+        ) {
+          return;
+        }
+
+        throw error;
+      }
+
+      await expect(
+        resolveExistingProjectPath(cwd, "outside-link.txt")
+      ).rejects.toThrow("Path escapes project cwd");
+    } finally {
+      await removeTempProject(cwd);
+      await removeTempProject(outside);
+    }
+  });
 });
 
 describe("ripgrep backend", () => {
@@ -69,7 +114,10 @@ describe("ripgrep backend", () => {
         stderr: "",
         exitCode: 0,
         signal: null,
-        timedOut: false
+        timedOut: false,
+        aborted: false,
+        stdoutTruncated: false,
+        stderrTruncated: false
       });
       expect(
         result.stdout
@@ -100,8 +148,67 @@ describe("ripgrep backend", () => {
         typeof result.exitCode === "number" || result.exitCode === null
       ).toBe(true);
       expect(typeof result.timedOut).toBe("boolean");
+      expect(typeof result.aborted).toBe("boolean");
+      expect(typeof result.stdoutTruncated).toBe("boolean");
+      expect(typeof result.stderrTruncated).toBe("boolean");
       expect(typeof result.durationMs).toBe("number");
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("truncates stdout and stops the child when stdout exceeds its limit", async () => {
+    const cwd = await makeTempProject("openharness-rg-stdout-limit-");
+    try {
+      writeFileSync(join(cwd, "long-file-name.txt"), "content\n", "utf8");
+
+      const result = await createRipgrepBackend().run(
+        ["--files", "--color", "never", "."],
+        { cwd, timeoutMs: 5000, maxStdoutBytes: 4 }
+      );
+
+      expect(result.stdoutTruncated).toBe(true);
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(4);
+      expect(result.timedOut).toBe(false);
+      expect(result.aborted).toBe(false);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("truncates stderr and stops the child when stderr exceeds its limit", async () => {
+    const cwd = await makeTempProject("openharness-rg-stderr-limit-");
+    try {
+      const result = await createRipgrepBackend().run(["[", "."], {
+        cwd,
+        timeoutMs: 5000,
+        maxStderrBytes: 8
+      });
+
+      expect(result.stderrTruncated).toBe(true);
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(8);
+      expect(result.timedOut).toBe(false);
+      expect(result.aborted).toBe(false);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("distinguishes aborted runs from timed-out runs", async () => {
+    const cwd = await makeTempProject("openharness-rg-abort-");
+    try {
+      writeFileSync(join(cwd, "gamma.txt"), "gamma\n", "utf8");
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await createRipgrepBackend().run(
+        ["--files", "--color", "never", "."],
+        { cwd, timeoutMs: 5000, signal: controller.signal }
+      );
+
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(false);
     } finally {
       await removeTempProject(cwd);
     }
