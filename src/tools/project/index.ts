@@ -4,6 +4,9 @@ export {
 export {
   createReadFileTool
 } from "./read-file.js";
+export {
+  createGlobTool
+} from "./glob.js";
 export type {
   RipgrepBackend,
   RipgrepBackendResult,
@@ -12,6 +15,10 @@ export type {
 export type {
   ReadFileToolInput
 } from "./read-file.js";
+export type {
+  CreateGlobToolOptions,
+  GlobToolInput
+} from "./glob.js";
 export {
   normalizeProjectPath,
   relativeProjectPath,

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createGlobTool,
   createReadFileTool,
   createRipgrepBackend,
   executeRegisteredTool,
@@ -86,6 +87,24 @@ async function executeReadFileTool(
     {
       toolUseId: "toolu_read_file",
       toolName: "read_file",
+      input
+    },
+    { cwd, metadata: {} }
+  );
+}
+
+async function executeGlobTool(
+  cwd: string,
+  input: unknown
+): Promise<Awaited<ReturnType<typeof executeRegisteredTool>>> {
+  const registry = new ToolRegistry();
+  registry.register(createGlobTool());
+
+  return await executeRegisteredTool(
+    registry,
+    {
+      toolUseId: "toolu_glob",
+      toolName: "glob",
       input
     },
     { cwd, metadata: {} }
@@ -898,5 +917,257 @@ describe("read_file project tool", () => {
 
   it("is read-only", () => {
     expect(createReadFileTool().isReadOnly?.({ path: "alpha.txt" })).toBe(true);
+  });
+});
+
+describe("glob project tool", () => {
+  it("lists matching files with ripgrep metadata", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-");
+    try {
+      writeFileSync(join(cwd, "alpha.ts"), "alpha\n", "utf8");
+      writeFileSync(join(cwd, "beta.txt"), "beta\n", "utf8");
+
+      const result = await createGlobTool().execute(
+        { pattern: "*.ts", limit: 10 },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "alpha.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 1,
+          truncated: false
+        }
+      });
+      expect(result.metadata.durationMs).toEqual(expect.any(Number));
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("accepts path as pattern alias and rejects ambiguous pattern and path through the registry", async () => {
+    const cwd = await makeTempProject("openharness-glob-alias-");
+    try {
+      writeFileSync(join(cwd, "alias.ts"), "alias\n", "utf8");
+      const registry = new ToolRegistry();
+      registry.register(createGlobTool());
+
+      const alias = await executeRegisteredTool(
+        registry,
+        {
+          toolUseId: "toolu_glob_alias",
+          toolName: "glob",
+          input: { path: "*.ts" }
+        },
+        { cwd, metadata: {} }
+      );
+      const ambiguous = await executeRegisteredTool(
+        registry,
+        {
+          toolUseId: "toolu_glob_ambiguous",
+          toolName: "glob",
+          input: { pattern: "*.ts", path: "*.js" }
+        },
+        { cwd, metadata: {} }
+      );
+
+      expect(alias).toMatchObject({
+        output: "alias.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          pattern: "*.ts"
+        }
+      });
+      expect(ambiguous).toMatchObject({
+        output: expect.stringContaining("Invalid input for glob"),
+        isError: true
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("applies root, limit, truncation metadata, and path safety", async () => {
+    const cwd = await makeTempProject("openharness-glob-root-");
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src", "a.ts"), "a\n", "utf8");
+      writeFileSync(join(cwd, "src", "b.ts"), "b\n", "utf8");
+      writeFileSync(join(cwd, "src", "note.txt"), "note\n", "utf8");
+      writeFileSync(join(cwd, "root-file.txt"), "root\n", "utf8");
+
+      const limited = await createGlobTool().execute(
+        { pattern: "*.ts", root: "src", limit: 1 },
+        { cwd, metadata: {} }
+      );
+      const escaped = await createGlobTool().execute(
+        { pattern: "*.ts", root: ".." },
+        { cwd, metadata: {} }
+      );
+      const fileRoot = await createGlobTool().execute(
+        { pattern: "*.txt", root: "root-file.txt" },
+        { cwd, metadata: {} }
+      );
+
+      expect(limited).toMatchObject({
+        output: "a.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          root: join(cwd, "src"),
+          matchedFileCount: 1,
+          truncated: true
+        }
+      });
+      expect(escaped.isError).toBe(true);
+      expect(escaped.output).toContain("Path escapes project cwd");
+      expect(escaped.metadata).toMatchObject({ tool: "glob" });
+      expect(fileRoot).toMatchObject({
+        output: expect.stringContaining("search root must be a directory"),
+        isError: true,
+        metadata: {
+          tool: "glob",
+          root: join(cwd, "root-file.txt")
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects symlink root escapes when symlinks are supported", async () => {
+    const cwd = await makeTempProject("openharness-glob-symlink-cwd-");
+    const outside = await makeTempProject("openharness-glob-symlink-out-");
+    try {
+      const linkPath = join(cwd, "outside-link");
+
+      try {
+        await symlink(outside, linkPath, "junction");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EPERM" || error.code === "EACCES")
+        ) {
+          return;
+        }
+
+        throw error;
+      }
+
+      const result = await createGlobTool().execute(
+        { pattern: "*.txt", root: "outside-link" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("Path escapes project cwd");
+      expect(result.metadata).toMatchObject({ tool: "glob" });
+    } finally {
+      await removeTempProject(cwd);
+      await removeTempProject(outside);
+    }
+  });
+
+  it("uses tinyglobby fallback when ripgrep is disabled", async () => {
+    const cwd = await makeTempProject("openharness-glob-fallback-");
+    try {
+      mkdirSync(join(cwd, ".hidden"));
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "visible.ts"), "visible\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "**/*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".hidden/dot.ts\nvisible.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          root: cwd,
+          pattern: "**/*.ts",
+          matchedFileCount: 2,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("returns no matches output and metadata", async () => {
+    const cwd = await makeTempProject("openharness-glob-empty-");
+    try {
+      writeFileSync(join(cwd, "alpha.txt"), "alpha\n", "utf8");
+
+      const result = await executeGlobTool(cwd, { pattern: "*.ts" });
+
+      expect(result).toMatchObject({
+        output: "(no matches)",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 0,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("validates empty pattern, bad limit, additional properties, and schema integer limit", async () => {
+    const cwd = await makeTempProject("openharness-glob-validation-");
+    try {
+      for (const input of [
+        null,
+        [],
+        {},
+        { pattern: "" },
+        { path: "   " },
+        { pattern: "*.ts", limit: 0 },
+        { pattern: "*.ts", limit: 1.5 },
+        { pattern: "*.ts", limit: 5001 },
+        { pattern: "*.ts", extra: true }
+      ]) {
+        const result = await executeGlobTool(cwd, input);
+
+        expect(result.isError).toBe(true);
+        expect(result.output).toContain("Invalid input for glob");
+      }
+
+      const registry = new ToolRegistry();
+      registry.register(createGlobTool());
+
+      expect(registry.toApiSchema()).toEqual([
+        expect.objectContaining({
+          name: "glob",
+          input_schema: expect.objectContaining({
+            additionalProperties: false,
+            properties: expect.objectContaining({
+              limit: expect.objectContaining({ type: "integer" })
+            })
+          })
+        })
+      ]);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("is read-only", () => {
+    expect(createGlobTool().isReadOnly?.({ pattern: "*.ts" })).toBe(true);
   });
 });
