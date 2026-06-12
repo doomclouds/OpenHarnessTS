@@ -92,8 +92,10 @@ export type {
   OpenAIFunctionTool,
   OpenAIToolCall
 } from "./api/index.js";
-export { runQuery } from "./engine/index.js";
-export type { QueryContext } from "./engine/index.js";
+export { createDeepSeekQueryEngineFromEnv } from "./deepseek.js";
+export type { CreateDeepSeekQueryEngineFromEnvOptions } from "./deepseek.js";
+export { QueryEngine, runQuery } from "./engine/index.js";
+export type { QueryContext, QueryEngineOptions } from "./engine/index.js";
 export {
   PermissionChecker,
   SENSITIVE_PATH_PATTERNS
