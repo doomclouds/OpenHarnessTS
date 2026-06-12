@@ -7,12 +7,15 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createReadFileTool,
   createRipgrepBackend,
+  executeRegisteredTool,
   normalizeProjectPath,
   relativeProjectPath,
   resolveExistingProjectPath,
-  resolveProjectPath
-} from "../src/tools/project/index.js";
+  resolveProjectPath,
+  ToolRegistry
+} from "../src/tools/index.js";
 
 async function makeTempProject(prefix: string): Promise<string> {
   return await mkdtemp(join(tmpdir(), prefix));
@@ -50,6 +53,24 @@ class FakeChildProcess extends EventEmitter {
     this.killed = true;
     return true;
   }
+}
+
+async function executeReadFileTool(
+  cwd: string,
+  input: unknown
+): Promise<Awaited<ReturnType<typeof executeRegisteredTool>>> {
+  const registry = new ToolRegistry();
+  registry.register(createReadFileTool());
+
+  return await executeRegisteredTool(
+    registry,
+    {
+      toolUseId: "toolu_read_file",
+      toolName: "read_file",
+      input
+    },
+    { cwd, metadata: {} }
+  );
 }
 
 describe("project tool path helpers", () => {
@@ -424,5 +445,160 @@ describe("ripgrep backend", () => {
       vi.doUnmock("node:child_process");
       vi.resetModules();
     }
+  });
+});
+
+describe("read_file project tool", () => {
+  it("reads a UTF-8 file with line numbers", async () => {
+    const cwd = await makeTempProject("openharness-read-file-");
+    try {
+      writeFileSync(join(cwd, "alpha.txt"), "alpha\nbeta\ngamma\n", "utf8");
+
+      const result = await executeReadFileTool(cwd, { path: "alpha.txt" });
+
+      expect(result).toMatchObject({
+        output: "     1\talpha\n     2\tbeta\n     3\tgamma",
+        isError: false,
+        metadata: {
+          tool: "read_file",
+          resolvedPath: join(cwd, "alpha.txt"),
+          offset: 0,
+          limit: 200,
+          lineCount: 3,
+          returnedLineCount: 3,
+          truncated: false,
+          binary: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("supports offset and limit", async () => {
+    const cwd = await makeTempProject("openharness-read-file-range-");
+    try {
+      writeFileSync(
+        join(cwd, "range.txt"),
+        "one\ntwo\nthree\nfour\n",
+        "utf8"
+      );
+
+      const result = await executeReadFileTool(cwd, {
+        path: "range.txt",
+        offset: 1,
+        limit: 2
+      });
+
+      expect(result).toMatchObject({
+        output: "     2\ttwo\n     3\tthree",
+        isError: false,
+        metadata: {
+          offset: 1,
+          limit: 2,
+          lineCount: 4,
+          returnedLineCount: 2,
+          truncated: true,
+          binary: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects missing files, directories, binary files, and path escapes", async () => {
+    const cwd = await makeTempProject("openharness-read-file-errors-");
+    try {
+      writeFileSync(join(cwd, "binary.bin"), Buffer.from([0x61, 0x00, 0x62]));
+
+      const missing = await executeReadFileTool(cwd, { path: "missing.txt" });
+      expect(missing.isError).toBe(true);
+      expect(missing.metadata).toMatchObject({ tool: "read_file" });
+
+      const directory = await executeReadFileTool(cwd, { path: "." });
+      expect(directory.isError).toBe(true);
+      expect(directory.output).toContain("directory");
+      expect(directory.metadata).toMatchObject({ tool: "read_file" });
+
+      const binary = await executeReadFileTool(cwd, { path: "binary.bin" });
+      expect(binary).toMatchObject({
+        isError: true,
+        metadata: {
+          tool: "read_file",
+          resolvedPath: join(cwd, "binary.bin"),
+          binary: true
+        }
+      });
+
+      const escaped = await executeReadFileTool(cwd, { path: "../outside.txt" });
+      expect(escaped.isError).toBe(true);
+      expect(escaped.output).toContain("Path escapes project cwd");
+      expect(escaped.metadata).toMatchObject({ tool: "read_file" });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects symlink escapes when symlinks are supported", async () => {
+    const cwd = await makeTempProject("openharness-read-file-symlink-cwd-");
+    const outside = await makeTempProject("openharness-read-file-symlink-out-");
+    try {
+      const outsideFile = join(outside, "outside.txt");
+      const linkPath = join(cwd, "outside-link.txt");
+      writeFileSync(outsideFile, "outside\n", "utf8");
+
+      try {
+        await symlink(outsideFile, linkPath, "file");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EPERM" || error.code === "EACCES")
+        ) {
+          return;
+        }
+
+        throw error;
+      }
+
+      const result = await executeReadFileTool(cwd, {
+        path: "outside-link.txt"
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("Path escapes project cwd");
+      expect(result.metadata).toMatchObject({ tool: "read_file" });
+    } finally {
+      await removeTempProject(cwd);
+      await removeTempProject(outside);
+    }
+  });
+
+  it("validates input through the registry execution path", async () => {
+    const cwd = await makeTempProject("openharness-read-file-validation-");
+    try {
+      for (const input of [
+        null,
+        {},
+        { path: "" },
+        { path: "alpha.txt", offset: 1.5 },
+        { path: "alpha.txt", offset: -1 },
+        { path: "alpha.txt", limit: 0 },
+        { path: "alpha.txt", limit: 2001 },
+        { path: "alpha.txt", extra: true }
+      ]) {
+        const result = await executeReadFileTool(cwd, input);
+
+        expect(result.isError).toBe(true);
+        expect(result.output).toContain("Invalid input for read_file");
+      }
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("is read-only", () => {
+    expect(createReadFileTool().isReadOnly?.({ path: "alpha.txt" })).toBe(true);
   });
 });
