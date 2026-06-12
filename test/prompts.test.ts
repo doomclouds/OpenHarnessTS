@@ -4,6 +4,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync
 } from "node:fs";
@@ -19,6 +20,7 @@ import {
   type ProjectInstructions
 } from "../src/prompts/index.js";
 import {
+  buildRuntimePrompt as buildRuntimePromptFromRoot,
   buildSystemPrompt as buildSystemPromptFromRoot,
   formatEnvironmentSection as formatEnvironmentSectionFromRoot
 } from "../src/index.js";
@@ -37,6 +39,11 @@ const environment: EnvironmentInfo = {
   gitBranch: "master",
   hostname: "dev-box"
 };
+
+function withoutGitBranch(info: EnvironmentInfo): Omit<EnvironmentInfo, "gitBranch"> {
+  const { gitBranch: _gitBranch, ...branchless } = info;
+  return branchless;
+}
 
 function makeTempDirectory(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
@@ -270,10 +277,9 @@ describe("buildRuntimePrompt", () => {
       const result = buildRuntimePrompt({
         cwd: repo,
         environment: {
-          ...environment,
+          ...withoutGitBranch(environment),
           cwd: resolve(repo),
-          isGitRepo: false,
-          gitBranch: undefined
+          isGitRepo: false
         },
         instructionOptions: {
           stopAt: repo
@@ -303,10 +309,9 @@ describe("buildRuntimePrompt", () => {
       const result = buildRuntimePrompt({
         cwd: repo,
         environment: {
-          ...environment,
+          ...withoutGitBranch(environment),
           cwd: resolve(repo),
-          isGitRepo: false,
-          gitBranch: undefined
+          isGitRepo: false
         },
         loadProjectInstructions: false,
         instructionOptions: {
@@ -418,10 +423,9 @@ describe("buildRuntimePrompt", () => {
       const result = buildRuntimePrompt({
         cwd: repo,
         environment: {
-          ...environment,
+          ...withoutGitBranch(environment),
           cwd: resolve(repo),
-          isGitRepo: false,
-          gitBranch: undefined
+          isGitRepo: false
         },
         instructionOptions: {
           stopAt: repo
@@ -518,12 +522,12 @@ describe("prompt root exports", () => {
     expect(formatEnvironmentSectionFromRoot(environment)).toBe(
       formatEnvironmentSection(environment)
     );
+    expect(buildRuntimePromptFromRoot).toBe(buildRuntimePrompt);
   });
 });
 
 describe("prompt integration boundary", () => {
-  it("keeps runQuery from implicitly importing the prompt builder", async () => {
-    const { readFileSync } = await import("node:fs");
+  it("keeps runQuery from implicitly importing the prompt builder", () => {
     const source = readFileSync("src/engine/query.ts", "utf8");
 
     expect(source).not.toContain("buildSystemPrompt");
@@ -532,12 +536,19 @@ describe("prompt integration boundary", () => {
     expect(source).not.toContain("loadProjectInstructions");
   });
 
-  it("keeps buildSystemPrompt from implicitly loading project instructions", async () => {
-    const { readFileSync } = await import("node:fs");
+  it("keeps buildSystemPrompt from implicitly loading project instructions", () => {
     const source = readFileSync("src/prompts/system-prompt.ts", "utf8");
 
     expect(source).not.toContain("project-instructions");
     expect(source).not.toContain("loadProjectInstructions");
     expect(source).not.toContain("discoverProjectInstructions");
+  });
+
+  it("keeps QueryEngine from implicitly using runtime prompt assembly", () => {
+    const source = readFileSync("src/engine/query-engine.ts", "utf8");
+
+    expect(source).not.toContain("buildRuntimePrompt");
+    expect(source).not.toContain("runtime-prompt");
+    expect(source).not.toContain("loadProjectInstructions");
   });
 });
