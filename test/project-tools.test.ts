@@ -19,6 +19,25 @@ async function removeTempProject(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
+function expectKilledByBackend(result: {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+}): void {
+  expect(result.exitCode).toBeNull();
+  expect(typeof result.signal).toBe("string");
+}
+
+function expectNonSuccessTermination(result: {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+}): void {
+  expect(
+    result.exitCode === null
+      ? typeof result.signal === "string"
+      : result.exitCode !== 0
+  ).toBe(true);
+}
+
 describe("project tool path helpers", () => {
   it("resolves cwd-relative paths inside the project", async () => {
     const cwd = await makeTempProject("openharness-paths-");
@@ -158,20 +177,66 @@ describe("ripgrep backend", () => {
     }
   });
 
-  it("truncates stdout and stops the child when stdout exceeds its limit", async () => {
-    const cwd = await makeTempProject("openharness-rg-stdout-limit-");
+  it("kills ripgrep and marks timeout metadata when timeout elapses", async () => {
+    const cwd = await makeTempProject("openharness-rg-timeout-kill-");
     try {
-      writeFileSync(join(cwd, "long-file-name.txt"), "content\n", "utf8");
+      writeFileSync(join(cwd, "timeout.txt"), "timeout\n", "utf8");
 
       const result = await createRipgrepBackend().run(
         ["--files", "--color", "never", "."],
-        { cwd, timeoutMs: 5000, maxStdoutBytes: 4 }
+        { cwd, timeoutMs: 0 }
+      );
+
+      expect(result.timedOut).toBe(true);
+      expect(result.aborted).toBe(false);
+      expect(result.stdoutTruncated).toBe(false);
+      expect(result.stderrTruncated).toBe(false);
+      expectKilledByBackend(result);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("returns command failure metadata without truncation", async () => {
+    const cwd = await makeTempProject("openharness-rg-failure-");
+    try {
+      const result = await createRipgrepBackend().run(["[", "."], {
+        cwd,
+        timeoutMs: 5000
+      });
+
+      expect(result.exitCode).not.toBe(0);
+      expect(result.exitCode).not.toBeNull();
+      expect(result.signal).toBeNull();
+      expect(result.stderr.length).toBeGreaterThan(0);
+      expect(result.timedOut).toBe(false);
+      expect(result.aborted).toBe(false);
+      expect(result.stdoutTruncated).toBe(false);
+      expect(result.stderrTruncated).toBe(false);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("truncates stdout and stops the child when stdout exceeds its limit", async () => {
+    const cwd = await makeTempProject("openharness-rg-stdout-limit-");
+    try {
+      writeFileSync(
+        join(cwd, "many-matches.txt"),
+        "match\n".repeat(250_000),
+        "utf8"
+      );
+
+      const result = await createRipgrepBackend().run(
+        ["--color", "never", "match", "."],
+        { cwd, timeoutMs: 5000, maxStdoutBytes: 1 }
       );
 
       expect(result.stdoutTruncated).toBe(true);
-      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(4);
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(1);
       expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
+      expectKilledByBackend(result);
     } finally {
       await removeTempProject(cwd);
     }
@@ -190,6 +255,7 @@ describe("ripgrep backend", () => {
       expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(8);
       expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
+      expectNonSuccessTermination(result);
     } finally {
       await removeTempProject(cwd);
     }
