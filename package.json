@@ -30,6 +30,8 @@
     "node": ">=20"
   },
   "dependencies": {
-    "openai": "^6.42.0"
+    "@vscode/ripgrep": "^1.18.0",
+    "openai": "^6.42.0",
+    "tinyglobby": "^0.2.17"
   }
 }
