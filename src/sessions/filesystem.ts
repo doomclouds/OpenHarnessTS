@@ -134,7 +134,14 @@ export async function loadLatestSession(
     throw error;
   }
 
-  const sessionPath = join(sessionDir, basename(pointer.path));
+  const expectedPath = `session-${pointer.sessionId}.jsonl`;
+  if (pointer.path !== expectedPath) {
+    throw new Error(
+      `${LATEST_FILE_NAME} path must be ${expectedPath} for session ${pointer.sessionId}.`
+    );
+  }
+
+  const sessionPath = join(sessionDir, expectedPath);
   try {
     const snapshot = await readSnapshotFile(sessionPath);
     if (snapshot.sessionId !== pointer.sessionId) {
@@ -200,11 +207,20 @@ export async function listRecentSessions(
       continue;
     }
 
+    const path = join(sessionDir, entry);
+    const content = await readFile(path, "utf8");
+
     try {
-      const snapshot = await readSnapshotFile(join(sessionDir, entry));
+      const snapshot = reconstructSessionSnapshot(
+        parseSessionJsonl(content, path),
+        path
+      );
       summaries.push(createSessionSummary(snapshot));
-    } catch {
-      continue;
+    } catch (error) {
+      if (isSessionParseError(error)) {
+        continue;
+      }
+      throw error;
     }
   }
 
@@ -314,5 +330,18 @@ function isNotFoundError(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     (error as { readonly code?: unknown }).code === "ENOENT"
+  );
+}
+
+function isSessionParseError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.message.startsWith("Invalid JSONL in ") ||
+    error.message.startsWith("Invalid session record in ") ||
+    error.message.startsWith("Session JSONL ") ||
+    error.message.startsWith("sessionId must ")
   );
 }

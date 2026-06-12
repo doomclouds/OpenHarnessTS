@@ -22,21 +22,19 @@ export function renderSessionTranscript(
       message.reasoningContent !== undefined &&
       message.reasoningContent.trim().length > 0
     ) {
-      parts.push("```reasoning", message.reasoningContent.trim(), "```", "");
+      parts.push(...renderFencedBlock("reasoning", message.reasoningContent.trim()));
     }
 
     for (const toolUse of getToolUses(message)) {
-      parts.push(
-        "```tool",
-        `${toolUse.name} ${JSON.stringify(toolUse.input)}`,
-        "```",
-        ""
-      );
+      parts.push(...renderFencedBlock(
+        "tool",
+        `${toolUse.name} ${JSON.stringify(toolUse.input)}`
+      ));
     }
 
     for (const block of message.content) {
       if (isToolResultBlock(block)) {
-        parts.push("```tool-result", block.content, "```", "");
+        parts.push(...renderFencedBlock("tool-result", block.content));
       }
     }
   }
@@ -46,4 +44,17 @@ export function renderSessionTranscript(
 
 function capitalize(value: string): string {
   return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+}
+
+function renderFencedBlock(info: string, content: string): string[] {
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
+  return [`${fence}${info}`, content, fence, ""];
+}
+
+function longestBacktickRun(content: string): number {
+  let longest = 0;
+  for (const match of content.matchAll(/`+/g)) {
+    longest = Math.max(longest, match[0].length);
+  }
+  return longest;
 }

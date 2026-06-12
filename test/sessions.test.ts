@@ -271,6 +271,38 @@ describe("session snapshot filesystem persistence", () => {
     }
   });
 
+  it("rejects latest.json when its path does not match the session id", async () => {
+    const { loadLatestSession, saveSessionSnapshot } = await loadRootSessionExports();
+    const { root, homeDir, cwd } = makeStorageContext();
+
+    try {
+      await saveSessionSnapshot({
+        cwd,
+        homeDir,
+        env: {},
+        sessionId: "sess_latest",
+        model: "mock-model",
+        systemPrompt: "System",
+        messages: [createUserMessageFromText("latest")]
+      });
+
+      const sessionDir = getProjectSessionDir(cwd, { env: {}, homeDir });
+      const latestPath = join(sessionDir, "latest.json");
+      const latest = readJson(latestPath);
+      writeFileSync(
+        latestPath,
+        `${JSON.stringify({ ...latest, path: "../evil.jsonl" }, null, 2)}\n`,
+        { encoding: "utf8" }
+      );
+
+      await expect(loadLatestSession(cwd, { env: {}, homeDir })).rejects.toThrow(
+        "latest.json path must be session-sess_latest.jsonl for session sess_latest."
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("lists recent sessions newest first", async () => {
     const { listRecentSessions, saveSessionSnapshot } = await loadRootSessionExports();
     const { root, homeDir, cwd } = makeStorageContext();
@@ -313,6 +345,30 @@ describe("session snapshot filesystem persistence", () => {
           path: join(getProjectSessionDir(cwd, { env: {}, homeDir }), "session-newer.jsonl")
         }
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not hide filesystem read failures while listing sessions", async () => {
+    const { listRecentSessions, saveSessionSnapshot } = await loadRootSessionExports();
+    const { root, homeDir, cwd } = makeStorageContext();
+
+    try {
+      await saveSessionSnapshot({
+        cwd,
+        homeDir,
+        env: {},
+        sessionId: "valid",
+        model: "mock-model",
+        systemPrompt: "System",
+        messages: [createUserMessageFromText("valid prompt")]
+      });
+
+      const sessionDir = getProjectSessionDir(cwd, { env: {}, homeDir });
+      mkdirSync(join(sessionDir, "session-directory.jsonl"));
+
+      await expect(listRecentSessions(cwd, { env: {}, homeDir })).rejects.toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -368,6 +424,46 @@ describe("session snapshot filesystem persistence", () => {
       expect(transcript).toContain("```tool");
       expect(transcript).toContain("echo {\"value\":\"hello\"}");
       expect(transcript).toContain("```tool-result");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses longer markdown fences when transcript content contains backticks", async () => {
+    const { exportSessionTranscript, saveSessionSnapshot } = await loadRootSessionExports();
+    const { root, homeDir, cwd } = makeStorageContext();
+
+    try {
+      await saveSessionSnapshot({
+        cwd,
+        homeDir,
+        env: {},
+        sessionId: "sess_fenced_transcript",
+        model: "mock-model",
+        systemPrompt: "System",
+        messages: [
+          createAssistantMessage([createTextBlock("thinking")], {
+            reasoningContent: "reasoning with ``` fence"
+          }),
+          createUserMessageFromContent([
+            createToolResultBlock({
+              toolUseId: "toolu_echo",
+              content: "value with ``` fence"
+            })
+          ])
+        ]
+      });
+
+      const transcriptPath = await exportSessionTranscript({
+        cwd,
+        sessionId: "sess_fenced_transcript",
+        env: {},
+        homeDir
+      });
+      const transcript = readFileSync(transcriptPath, "utf8");
+
+      expect(transcript).toContain("````reasoning\nreasoning with ``` fence\n````");
+      expect(transcript).toContain("````tool-result\nvalue with ``` fence\n````");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
