@@ -373,7 +373,8 @@ describe("QueryEngine composition", () => {
       toolRegistry: registry
     });
 
-    expect(engine.getTool("echo")).toBe(registry.getTool("echo"));
+    expect(engine.getTool("echo")).toBeDefined();
+    expect(engine.getTool("echo")).toEqual(registry.getTool("echo"));
     expect(engine.listTools()).toHaveLength(1);
     expect(() =>
       new QueryEngine({

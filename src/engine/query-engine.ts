@@ -67,10 +67,7 @@ export class QueryEngine {
     }
 
     this.apiClient = options.apiClient;
-    this.toolRegistry =
-      options.toolRegistry === undefined
-        ? new ToolRegistry()
-        : stabilizeToolRegistryLookups(options.toolRegistry);
+    this.toolRegistry = options.toolRegistry ?? new ToolRegistry();
     for (const tool of options.tools ?? []) {
       this.toolRegistry.register(tool);
     }
@@ -184,27 +181,4 @@ function assertNonEmptyString(value: unknown, message: string): asserts value is
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new Error(message);
   }
-}
-
-function stabilizeToolRegistryLookups(registry: ToolRegistry): ToolRegistry {
-  const originalGetTool = registry.getTool.bind(registry);
-  const originalRegister = registry.register.bind(registry);
-  const cache = new Map<string, ToolDefinition | undefined>();
-
-  registry.getTool = (name: string): ToolDefinition | undefined => {
-    const key = name.trim();
-
-    if (!cache.has(key)) {
-      cache.set(key, originalGetTool(name));
-    }
-
-    return cache.get(key);
-  };
-
-  registry.register = (tool: ToolDefinition): void => {
-    originalRegister(tool);
-    cache.clear();
-  };
-
-  return registry;
 }
