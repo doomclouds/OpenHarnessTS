@@ -626,6 +626,7 @@ describe("read_file project tool", () => {
     const cwd = await makeTempProject("openharness-read-file-errors-");
     try {
       writeFileSync(join(cwd, "binary.bin"), Buffer.from([0x61, 0x00, 0x62]));
+      writeFileSync(join(cwd, "invalid-utf8.txt"), Buffer.from([0xc3, 0x28]));
 
       const missing = await executeReadFileTool(cwd, { path: "missing.txt" });
       expect(missing.isError).toBe(true);
@@ -633,7 +634,7 @@ describe("read_file project tool", () => {
 
       const directory = await executeReadFileTool(cwd, { path: "." });
       expect(directory.isError).toBe(true);
-      expect(directory.output).toContain("directory");
+      expect(directory.output).toContain("regular file");
       expect(directory.metadata).toMatchObject({ tool: "read_file" });
 
       const binary = await executeReadFileTool(cwd, { path: "binary.bin" });
@@ -642,6 +643,18 @@ describe("read_file project tool", () => {
         metadata: {
           tool: "read_file",
           resolvedPath: join(cwd, "binary.bin"),
+          binary: true
+        }
+      });
+
+      const invalidUtf8 = await executeReadFileTool(cwd, {
+        path: "invalid-utf8.txt"
+      });
+      expect(invalidUtf8).toMatchObject({
+        isError: true,
+        metadata: {
+          tool: "read_file",
+          resolvedPath: join(cwd, "invalid-utf8.txt"),
           binary: true
         }
       });
@@ -675,6 +688,60 @@ describe("read_file project tool", () => {
       });
     } finally {
       await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects files that exceed the read size limit after stat", async () => {
+    vi.resetModules();
+
+    const maxBytes = 1024 * 1024;
+    const resolvedPath = "C:\\project\\growing.txt";
+    const read = vi.fn(async (buffer: Buffer) => {
+      buffer.fill(0x61, 0, maxBytes + 1);
+
+      return {
+        bytesRead: maxBytes + 1,
+        buffer
+      };
+    });
+    const close = vi.fn(async () => undefined);
+
+    vi.doMock("node:fs/promises", () => ({
+      realpath: vi.fn(async (path: string) => path),
+      stat: vi.fn(async () => ({
+        size: 1,
+        isDirectory: () => false,
+        isFile: () => true
+      })),
+      open: vi.fn(async () => ({ read, close })),
+      readFile: vi.fn(async () => Buffer.from("small"))
+    }));
+
+    try {
+      const { createReadFileTool: createMockedReadFileTool } = await import(
+        "../src/tools/project/read-file.js"
+      );
+
+      const result = await createMockedReadFileTool().execute(
+        { path: "growing.txt" },
+        { cwd: "C:\\project", metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: expect.stringContaining("exceeds read_file size limit"),
+        isError: true,
+        metadata: {
+          tool: "read_file",
+          resolvedPath,
+          fileSizeBytes: maxBytes + 1,
+          maxBytes
+        }
+      });
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
     }
   });
 

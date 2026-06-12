@@ -1,4 +1,5 @@
-import { readFile, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
+import { TextDecoder } from "node:util";
 import type { ToolDefinition } from "../definition.js";
 import { createToolErrorResult, createToolResult } from "../results.js";
 import { resolveExistingProjectPath } from "./paths.js";
@@ -6,6 +7,7 @@ import { resolveExistingProjectPath } from "./paths.js";
 const defaultLimit = 200;
 const maxLimit = 2000;
 const maxReadFileBytes = 1024 * 1024;
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 export interface ReadFileToolInput {
   readonly path: string;
@@ -80,11 +82,14 @@ export function createReadFileTool(): ToolDefinition {
       try {
         const fileStat = await stat(resolvedPath);
 
-        if (fileStat.isDirectory()) {
-          return createToolErrorResult(`Cannot read directory: ${resolvedPath}`, {
-            tool: "read_file",
-            resolvedPath
-          });
+        if (!fileStat.isFile()) {
+          return createToolErrorResult(
+            `Cannot read non-regular file: ${resolvedPath}`,
+            {
+              tool: "read_file",
+              resolvedPath
+            }
+          );
         }
 
         if (fileStat.size > maxReadFileBytes) {
@@ -99,7 +104,21 @@ export function createReadFileTool(): ToolDefinition {
           );
         }
 
-        const buffer = await readFile(resolvedPath);
+        const cappedRead = await readCappedFile(resolvedPath, fileStat.size);
+
+        if (!cappedRead.ok) {
+          return createToolErrorResult(
+            `File exceeds read_file size limit: ${resolvedPath}`,
+            {
+              tool: "read_file",
+              resolvedPath,
+              fileSizeBytes: cappedRead.fileSizeBytes,
+              maxBytes: maxReadFileBytes
+            }
+          );
+        }
+
+        const { buffer } = cappedRead;
 
         if (buffer.includes(0)) {
           return createToolErrorResult(
@@ -112,7 +131,19 @@ export function createReadFileTool(): ToolDefinition {
           );
         }
 
-        const lines = splitTextLines(buffer.toString("utf8"));
+        const text = decodeUtf8Text(buffer);
+        if (text === undefined) {
+          return createToolErrorResult(
+            `Cannot decode UTF-8 text file: ${resolvedPath}`,
+            {
+              tool: "read_file",
+              resolvedPath,
+              binary: true
+            }
+          );
+        }
+
+        const lines = splitTextLines(text);
         const selectedLines = lines.slice(
           readInput.offset,
           readInput.offset + readInput.limit
@@ -151,6 +182,46 @@ export function createReadFileTool(): ToolDefinition {
       }
     }
   };
+}
+
+async function readCappedFile(
+  resolvedPath: string,
+  statSizeBytes: number
+): Promise<
+  | {
+      readonly ok: true;
+      readonly buffer: Buffer;
+    }
+  | {
+      readonly ok: false;
+      readonly fileSizeBytes: number;
+    }
+> {
+  const file = await open(resolvedPath, "r");
+
+  try {
+    const buffer = Buffer.allocUnsafe(maxReadFileBytes + 1);
+    const { bytesRead } = await file.read(
+      buffer,
+      0,
+      maxReadFileBytes + 1,
+      0
+    );
+
+    if (bytesRead > maxReadFileBytes) {
+      return {
+        ok: false,
+        fileSizeBytes: Math.max(statSizeBytes, bytesRead)
+      };
+    }
+
+    return {
+      ok: true,
+      buffer: buffer.subarray(0, bytesRead)
+    };
+  } finally {
+    await file.close();
+  }
 }
 
 function validateReadFileToolInput(input: unknown): {
@@ -211,6 +282,14 @@ function splitTextLines(text: string): string[] {
   }
 
   return lines;
+}
+
+function decodeUtf8Text(buffer: Buffer): string | undefined {
+  try {
+    return utf8Decoder.decode(buffer);
+  } catch {
+    return undefined;
+  }
 }
 
 function errorToMessage(error: unknown): string {
