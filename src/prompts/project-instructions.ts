@@ -1,10 +1,12 @@
 import {
   type Dirent,
+  readFileSync,
   readdirSync,
   statSync
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TextDecoder } from "node:util";
 
 export type ProjectInstructionKind =
   | "agents"
@@ -40,6 +42,9 @@ export interface LoadProjectInstructionsOptions
   extends DiscoverProjectInstructionsOptions {
   readonly maxCharsPerFile?: number;
 }
+
+const DEFAULT_MAX_CHARS_PER_FILE = 12000;
+const TRUNCATION_MARKER = "\n...[truncated]...";
 
 export function discoverProjectInstructions(
   cwd: string | URL,
@@ -97,6 +102,65 @@ export function discoverProjectInstructions(
   }
 
   return files.map((file, order) => ({ ...file, order }));
+}
+
+export function loadProjectInstructions(
+  cwd: string | URL,
+  options: LoadProjectInstructionsOptions = {}
+): ProjectInstructions | undefined {
+  const maxCharsPerFile = options.maxCharsPerFile ?? DEFAULT_MAX_CHARS_PER_FILE;
+  assertPositiveInteger(
+    maxCharsPerFile,
+    "maxCharsPerFile must be a positive integer."
+  );
+
+  const resolvedCwd = resolvePathInput(cwd, "cwd");
+  const discovered = discoverProjectInstructions(resolvedCwd, options);
+  if (discovered.length === 0) {
+    return undefined;
+  }
+
+  const files = discovered.map((file): LoadedProjectInstruction => {
+    const raw = decodeUtf8WithReplacement(readFileSync(file.path));
+    const truncated = raw.length > maxCharsPerFile;
+    const content = truncated
+      ? `${raw.slice(0, maxCharsPerFile)}${TRUNCATION_MARKER}`
+      : raw;
+
+    return {
+      ...file,
+      content,
+      originalCharCount: raw.length,
+      loadedCharCount: content.length,
+      truncated
+    };
+  });
+  const section = formatProjectInstructionsSection(files);
+
+  if (section === undefined) {
+    return undefined;
+  }
+
+  return {
+    cwd: resolvedCwd,
+    files,
+    section
+  };
+}
+
+export function formatProjectInstructionsSection(
+  files: readonly LoadedProjectInstruction[]
+): string | undefined {
+  if (files.length === 0) {
+    return undefined;
+  }
+
+  const lines = ["# Project Instructions"];
+  for (const file of files) {
+    lines.push("", `## ${file.path}`, "```md", file.content.trim(), "```");
+  }
+
+  return lines.join("\n");
 }
 
 function appendCandidate(
@@ -203,4 +267,14 @@ function comparePathNames(left: string, right: string): number {
     return 1;
   }
   return 0;
+}
+
+function decodeUtf8WithReplacement(buffer: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(buffer);
+}
+
+function assertPositiveInteger(value: number, message: string): void {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(message);
+  }
 }

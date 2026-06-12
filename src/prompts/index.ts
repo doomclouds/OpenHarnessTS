@@ -12,7 +12,9 @@ export {
 } from "./system-prompt.js";
 export type { BuildSystemPromptOptions } from "./system-prompt.js";
 export {
-  discoverProjectInstructions
+  discoverProjectInstructions,
+  formatProjectInstructionsSection,
+  loadProjectInstructions
 } from "./project-instructions.js";
 export type {
   DiscoverProjectInstructionsOptions,

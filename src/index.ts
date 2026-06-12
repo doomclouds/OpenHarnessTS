@@ -142,7 +142,9 @@ export {
   collectEnvironmentInfo,
   DEFAULT_SYSTEM_PROMPT,
   discoverProjectInstructions,
-  formatEnvironmentSection
+  formatEnvironmentSection,
+  formatProjectInstructionsSection,
+  loadProjectInstructions
 } from "./prompts/index.js";
 export type {
   BuildSystemPromptOptions,

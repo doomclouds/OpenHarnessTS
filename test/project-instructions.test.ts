@@ -10,6 +10,9 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   discoverProjectInstructions,
+  formatProjectInstructionsSection,
+  loadProjectInstructions,
+  type LoadedProjectInstruction,
   type ProjectInstructionFile
 } from "../src/prompts/index.js";
 
@@ -156,5 +159,155 @@ describe("discoverProjectInstructions", () => {
     expect(() => discoverProjectInstructions(new URL("https://example.com/repo"))).toThrow(
       "cwd URL must use the file: protocol."
     );
+  });
+});
+
+describe("loadProjectInstructions", () => {
+  it("loads instructions with provenance and formats section", () => {
+    const root = makeTempProject("openharness-instructions-load-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "  use repo rules  ");
+
+      const loaded = loadProjectInstructions(repo, { stopAt: repo });
+
+      expect(loaded).not.toBeUndefined();
+      expect(loaded?.cwd).toBe(resolve(repo));
+      expect(loaded?.files).toHaveLength(1);
+      expect(loaded?.files[0]).toMatchObject({
+        path: resolve(repo, "AGENTS.md"),
+        kind: "agents",
+        directory: resolve(repo),
+        order: 0,
+        content: "  use repo rules  ",
+        originalCharCount: 18,
+        loadedCharCount: 18,
+        truncated: false
+      });
+      expect(loaded?.section).toBe(`# Project Instructions
+
+## ${resolve(repo, "AGENTS.md")}
+\`\`\`md
+use repo rules
+\`\`\``);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns undefined when no instruction files exist", () => {
+    const root = makeTempProject("openharness-instructions-load-empty-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+
+      expect(loadProjectInstructions(repo, { stopAt: repo })).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates each file independently and records counts", () => {
+    const root = makeTempProject("openharness-instructions-truncate-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "abcdef");
+      writeText(join(repo, "CLAUDE.md"), "xy");
+
+      const loaded = loadProjectInstructions(repo, {
+        stopAt: repo,
+        maxCharsPerFile: 3
+      });
+
+      expect(loaded?.files.map((file) => ({
+        content: file.content,
+        originalCharCount: file.originalCharCount,
+        loadedCharCount: file.loadedCharCount,
+        truncated: file.truncated
+      }))).toEqual([
+        {
+          content: "abc\n...[truncated]...",
+          originalCharCount: 6,
+          loadedCharCount: 21,
+          truncated: true
+        },
+        {
+          content: "xy",
+          originalCharCount: 2,
+          loadedCharCount: 2,
+          truncated: false
+        }
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces invalid UTF-8 byte sequences while loading", () => {
+    const root = makeTempProject("openharness-instructions-utf8-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeFileSync(join(repo, "AGENTS.md"), Buffer.from([0x61, 0xff, 0x62]));
+
+      const loaded = loadProjectInstructions(repo, { stopAt: repo });
+
+      expect(loaded?.files[0]?.content).toBe("a�b");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid maxCharsPerFile values", () => {
+    const root = makeTempProject("openharness-instructions-invalid-limit-");
+
+    try {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "hello");
+
+      expect(() =>
+        loadProjectInstructions(repo, { stopAt: repo, maxCharsPerFile: 0 })
+      ).toThrow("maxCharsPerFile must be a positive integer.");
+      expect(() =>
+        loadProjectInstructions(repo, { stopAt: repo, maxCharsPerFile: 1.5 })
+      ).toThrow("maxCharsPerFile must be a positive integer.");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("formatProjectInstructionsSection", () => {
+  it("returns undefined for empty list", () => {
+    expect(formatProjectInstructionsSection([])).toBeUndefined();
+  });
+
+  it("formats loaded files without filesystem access", () => {
+    const files: readonly LoadedProjectInstruction[] = [
+      {
+        path: "C:/repo/AGENTS.md",
+        kind: "agents",
+        directory: "C:/repo",
+        order: 0,
+        content: "alpha",
+        originalCharCount: 5,
+        loadedCharCount: 5,
+        truncated: false
+      }
+    ];
+
+    expect(formatProjectInstructionsSection(files)).toBe(`# Project Instructions
+
+## C:/repo/AGENTS.md
+\`\`\`md
+alpha
+\`\`\``);
   });
 });
