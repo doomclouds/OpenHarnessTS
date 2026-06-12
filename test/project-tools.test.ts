@@ -47,6 +47,22 @@ function expectNonSuccessTermination(result: {
   ).toBe(true);
 }
 
+function expectReadCall(
+  read: { readonly mock: { readonly calls: readonly (readonly unknown[])[] } },
+  callIndex: number,
+  args: {
+    readonly offset: number;
+    readonly length: number;
+    readonly position: number;
+  }
+): void {
+  const call = read.mock.calls[callIndex];
+
+  expect(call?.[1]).toBe(args.offset);
+  expect(call?.[2]).toBe(args.length);
+  expect(call?.[3]).toBe(args.position);
+}
+
 class FakeChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
@@ -761,11 +777,21 @@ describe("read_file project tool", () => {
       }
     });
     expect(read).toHaveBeenCalledTimes(2);
+    expectReadCall(read, 0, {
+      offset: 0,
+      length: maxBytes + 1,
+      position: 0
+    });
+    expectReadCall(read, 1, {
+      offset: 0,
+      length: 1,
+      position: maxBytes
+    });
     expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("allows exactly max bytes followed by EOF", async () => {
-    const { result, read, close } =
+    const { result, read, close, maxBytes } =
       await executeReadFileWithMockedReadSizes([readFileMaxBytes, 0]);
 
     expect(result.isError).toBe(false);
@@ -778,6 +804,16 @@ describe("read_file project tool", () => {
       binary: false
     });
     expect(read).toHaveBeenCalledTimes(2);
+    expectReadCall(read, 0, {
+      offset: 0,
+      length: maxBytes + 1,
+      position: 0
+    });
+    expectReadCall(read, 1, {
+      offset: 0,
+      length: 1,
+      position: maxBytes
+    });
     expect(close).toHaveBeenCalledTimes(1);
   });
 

@@ -21,7 +21,7 @@ interface NormalizedReadFileToolInput {
   readonly limit: number;
 }
 
-export function createReadFileTool(): ToolDefinition {
+export function createReadFileTool(): ToolDefinition<unknown> {
   return {
     name: "read_file",
     description: "Read a UTF-8 text file from the local project.",
