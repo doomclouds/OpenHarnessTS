@@ -244,7 +244,7 @@ async function ripgrepGlob(
   signal: AbortSignal | undefined
 ): Promise<GlobMatchResult> {
   const result = await backend.run(
-    ["--files", "--color", "never", "--glob", pattern, "."],
+    ["--files", "--hidden", "--color", "never", "--glob", pattern, "."],
     {
       cwd: root,
       timeoutMs,
@@ -288,7 +288,12 @@ function isRipgrepFileListSuccess(result: RipgrepBackendResult): boolean {
     return true;
   }
 
-  return result.stdoutTruncated && result.stderr.trim().length === 0;
+  return (
+    result.exitCode === null &&
+    result.signal !== null &&
+    result.stdoutTruncated &&
+    result.stderr.trim().length === 0
+  );
 }
 
 async function fallbackGlob(
@@ -362,12 +367,36 @@ async function normalizeMatchedPath(
     return undefined;
   }
 
-  const realMatchedPath = await realpath(path.resolve(root, relativePath));
+  const realMatchedPath = await realpathMatchedPath(
+    path.resolve(root, relativePath)
+  );
+  if (realMatchedPath === undefined) {
+    return undefined;
+  }
+
   if (!isInsideRoot(root, realMatchedPath)) {
     return undefined;
   }
 
   return relativePath;
+}
+
+async function realpathMatchedPath(
+  matchedPath: string
+): Promise<string | undefined> {
+  try {
+    return await realpath(matchedPath);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return undefined;
+    }
+
+    throw error;
+  }
 }
 
 function isSafeRelativeGlobPattern(pattern: string): boolean {
