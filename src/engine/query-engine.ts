@@ -49,6 +49,7 @@ export class QueryEngine {
   private readonly hookExecutor?: HookExecutor;
   private readonly toolMetadata?: Readonly<Record<string, unknown>>;
   private readonly messages: ConversationMessage[] = [];
+  private activeTurn = false;
 
   public constructor(options: QueryEngineOptions) {
     assertRequiredObject(options, "QueryEngine options are required.");
@@ -89,8 +90,13 @@ export class QueryEngine {
       throw new Error("QueryEngine.submitMessage only accepts user messages.");
     }
 
+    if (this.activeTurn) {
+      throw new Error("QueryEngine already has an active turn.");
+    }
+
     this.messages.push(message);
-    return runQuery(this.createContext(), this.messages);
+    this.activeTurn = true;
+    return this.runActiveTurn();
   }
 
   public getMessages(): readonly ConversationMessage[] {
@@ -121,6 +127,14 @@ export class QueryEngine {
       ...(this.maxTurns === undefined ? {} : { maxTurns: this.maxTurns }),
       ...(this.signal === undefined ? {} : { signal: this.signal })
     };
+  }
+
+  private async *runActiveTurn(): AsyncIterable<StreamEvent> {
+    try {
+      yield* runQuery(this.createContext(), this.messages);
+    } finally {
+      this.activeTurn = false;
+    }
   }
 }
 

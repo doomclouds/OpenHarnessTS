@@ -147,4 +147,45 @@ describe("QueryEngine plain text facade", () => {
     expect(snapshot).toHaveLength(1);
     expect(engine.getMessages()).toHaveLength(2);
   });
+
+  it("rejects overlapping turns before the active turn is consumed", async () => {
+    const client = new ScriptedApiClient([
+      [textComplete("first done")],
+      [textComplete("second done")]
+    ]);
+    const engine = new QueryEngine({
+      apiClient: client,
+      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      model: "mock-model",
+      systemPrompt: "You are a test assistant."
+    });
+
+    const first = engine.submitMessage("first");
+
+    expect(() => engine.submitMessage("second")).toThrow(
+      "QueryEngine already has an active turn."
+    );
+    expect(engine.getMessages()).toEqual([createUserMessageFromText("first")]);
+    expect(client.requests).toEqual([]);
+
+    await collectEvents(first);
+
+    expect(client.requests).toHaveLength(1);
+    expect(client.requests[0]?.messages).toEqual([
+      createUserMessageFromText("first")
+    ]);
+
+    const secondEvents = await collectEvents(engine.submitMessage("second"));
+
+    expect(client.requests).toHaveLength(2);
+    expect(client.requests[1]?.messages).toEqual([
+      createUserMessageFromText("first"),
+      createAssistantMessage([createTextBlock("first done")]),
+      createUserMessageFromText("second")
+    ]);
+    expect(secondEvents.map((event) => event.type)).toEqual([
+      "assistant_turn_complete"
+    ]);
+    expect(getMessageText(engine.getMessages().at(-1)!)).toBe("second done");
+  });
 });
