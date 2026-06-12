@@ -148,3 +148,31 @@ export type {
   CollectEnvironmentInfoOptions,
   EnvironmentInfo
 } from "./prompts/index.js";
+export {
+  FileSessionBackend,
+  exportSessionTranscript,
+  listRecentSessions,
+  loadLatestSession,
+  loadSessionById,
+  renderSessionTranscript,
+  saveQueryEngineSnapshot,
+  saveSessionSnapshot
+} from "./sessions/index.js";
+export type {
+  ExportSessionTranscriptArgs,
+  LatestSessionPointer,
+  ListSessionsOptions,
+  LoadSessionOptions,
+  SaveQueryEngineSnapshotArgs,
+  SaveSessionSnapshotArgs,
+  SessionBackend,
+  SessionMessageRecord,
+  SessionRecord,
+  SessionSnapshot,
+  SessionStartRecord,
+  SessionStorageOptions,
+  SessionSummary,
+  SessionSummaryRecord,
+  SessionToolMetadataRecord,
+  SessionUsageRecord
+} from "./sessions/index.js";

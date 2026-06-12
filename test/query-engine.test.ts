@@ -198,6 +198,24 @@ describe("QueryEngine plain text facade", () => {
     expect(engine.getMessages()).toHaveLength(2);
   });
 
+  it("exposes read-only snapshot metadata for persistence helpers", () => {
+    const client = new ScriptedApiClient([[textComplete("unused")]]);
+    const toolMetadata = { permissionMode: "default" };
+    const engine = new QueryEngine({
+      apiClient: client,
+      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      model: "mock-model",
+      systemPrompt: "You are a test assistant.",
+      toolMetadata
+    });
+
+    expect(engine.getCwd()).toBe("C:/WorkSpace/ResearchProjects/OpenHarnessTS");
+    expect(engine.getModel()).toBe("mock-model");
+    expect(engine.getSystemPrompt()).toBe("You are a test assistant.");
+    expect(engine.getToolMetadata()).toEqual(toolMetadata);
+    expect(engine.getToolMetadata()).not.toBe(toolMetadata);
+  });
+
   it("rejects overlapping turns before the active turn is consumed", async () => {
     const client = new ScriptedApiClient([
       [textComplete("first done")],
