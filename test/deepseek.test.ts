@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDeepSeekApiClientFromEnv,
+  createDeepSeekQueryEngineFromEnv,
   createUserMessageFromText,
   DeepSeekApiClient,
   DEFAULT_DEEPSEEK_BASE_URL,
@@ -8,6 +9,7 @@ import {
   getMessageText,
   getToolUses,
   normalizeDeepSeekBaseURL,
+  QueryEngine,
   type DeepSeekReasoningEffort,
   type DeepSeekSdkClient,
   type DeepSeekSdkOptions,
@@ -451,5 +453,89 @@ describe("DeepSeek client configuration", () => {
     expect(normalizeDeepSeekBaseURL(undefined)).toBe(
       DEFAULT_DEEPSEEK_BASE_URL
     );
+  });
+});
+
+describe("DeepSeek QueryEngine factory", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("creates a QueryEngine from DeepSeek env values without starting a request", () => {
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+
+    vi.stubEnv("DEEPSEEK_API_KEY", "env-key");
+    vi.stubEnv("DEEPSEEK_BASE_URL", "https://deepseek.example.com///");
+    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-env-model");
+
+    const engine = createDeepSeekQueryEngineFromEnv({
+      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      systemPrompt: "You are a test assistant.",
+      createSdkClient(options) {
+        sdkOptions.push(options);
+        return emptyFakeSdkClient();
+      }
+    });
+
+    expect(engine).toBeInstanceOf(QueryEngine);
+    expect(sdkOptions).toEqual([
+      {
+        apiKey: "env-key",
+        baseURL: "https://deepseek.example.com"
+      }
+    ]);
+  });
+
+  it("runs a no-network QueryEngine request through the DeepSeek factory", async () => {
+    const requests: unknown[] = [];
+
+    vi.stubEnv("DEEPSEEK_API_KEY", "env-key");
+    vi.stubEnv("DEEPSEEK_MODEL", "deepseek-env-model");
+
+    const engine = createDeepSeekQueryEngineFromEnv({
+      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      systemPrompt: "You are a test assistant.",
+      createSdkClient: () =>
+        fakeStreamSdkClient({
+          requests,
+          chunks: [
+            { choices: [{ delta: { content: "Hi" } }] },
+            { usage: { prompt_tokens: 3, completion_tokens: 5 } }
+          ]
+        })
+    });
+
+    const events = [];
+    for await (const event of engine.submitMessage("hello")) {
+      events.push(event);
+    }
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      model: "deepseek-env-model",
+      messages: [
+        { role: "system", content: "You are a test assistant." },
+        { role: "user", content: "hello" }
+      ],
+      stream: true,
+      stream_options: { include_usage: true }
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      "assistant_text_delta",
+      "assistant_turn_complete"
+    ]);
+    expect(engine.getMessages()).toHaveLength(2);
+  });
+
+  it("preserves the existing missing API key error", () => {
+    vi.stubEnv("DEEPSEEK_API_KEY", "");
+
+    expect(() =>
+      createDeepSeekQueryEngineFromEnv({
+        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+        systemPrompt: "You are a test assistant.",
+        createSdkClient: emptyFakeSdkClient
+      })
+    ).toThrow("DEEPSEEK_API_KEY is required to create a DeepSeek API client.");
   });
 });
