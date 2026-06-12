@@ -18,6 +18,10 @@ import {
   ToolRegistry
 } from "../src/tools/index.js";
 import type { ReadFileToolInput } from "../src/tools/index.js";
+import type {
+  RipgrepBackend,
+  RipgrepBackendResult
+} from "../src/tools/index.js";
 
 const readFileMaxBytes = 1024 * 1024;
 
@@ -73,6 +77,32 @@ class FakeChildProcess extends EventEmitter {
     this.killed = true;
     return true;
   }
+}
+
+function createFakeRipgrepResult(
+  overrides: Partial<RipgrepBackendResult> = {}
+): RipgrepBackendResult {
+  return {
+    backend: "ripgrep",
+    stdout: "",
+    stderr: "",
+    exitCode: 0,
+    signal: null,
+    timedOut: false,
+    aborted: false,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    durationMs: 1,
+    ...overrides
+  };
+}
+
+function createFakeRipgrepBackend(
+  result: RipgrepBackendResult
+): RipgrepBackend {
+  return {
+    run: vi.fn(async () => result)
+  };
 }
 
 async function executeReadFileTool(
@@ -1099,6 +1129,208 @@ describe("glob project tool", () => {
           truncated: false
         }
       });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("fallback does not expose files through internal symlinks when symlinks are supported", async () => {
+    const cwd = await makeTempProject("openharness-glob-fallback-link-cwd-");
+    const outside = await makeTempProject("openharness-glob-fallback-link-out-");
+    try {
+      const linkPath = join(cwd, "outside-link");
+      writeFileSync(join(outside, "outside.ts"), "outside\n", "utf8");
+
+      try {
+        await symlink(outside, linkPath, "junction");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          (error.code === "EPERM" || error.code === "EACCES")
+        ) {
+          return;
+        }
+
+        throw error;
+      }
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "**/*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "(no matches)",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          matchedFileCount: 0,
+          truncated: false
+        }
+      });
+      expect(result.output).not.toContain("outside.ts");
+    } finally {
+      await removeTempProject(cwd);
+      await removeTempProject(outside);
+    }
+  });
+
+  it("passes expected args, cwd, timeout, and signal to the ripgrep backend", async () => {
+    const cwd = await makeTempProject("openharness-glob-backend-options-");
+    try {
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, "src", "a.ts"), "a\n", "utf8");
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({ stdout: "a.ts\n" })
+      );
+      const controller = new AbortController();
+
+      const result = await createGlobTool({
+        backend,
+        timeoutMs: 123
+      }).execute(
+        { pattern: "*.ts", root: "src" },
+        { cwd, metadata: {}, signal: controller.signal }
+      );
+
+      expect(result.isError).toBe(false);
+      expect(result.output).toBe("a.ts");
+      expect(backend.run).toHaveBeenCalledWith(
+        ["--files", "--color", "never", "--glob", "*.ts", "."],
+        {
+          cwd: join(cwd, "src"),
+          timeoutMs: 123,
+          signal: controller.signal
+        }
+      );
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("treats ripgrep exit code 1 with empty stderr as no matches", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-no-match-");
+    try {
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({ exitCode: 1 })
+      );
+
+      const result = await createGlobTool({ backend }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "(no matches)",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          matchedFileCount: 0,
+          truncated: false,
+          stdoutTruncated: false,
+          stderrTruncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("returns ripgrep backend errors with metadata", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-error-");
+    try {
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          stderr: "bad glob",
+          exitCode: 2,
+          stdoutTruncated: true
+        })
+      );
+
+      const result = await createGlobTool({ backend }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "bad glob",
+        isError: true,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          stdoutTruncated: true,
+          stderrTruncated: false,
+          exitCode: 2
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("surfaces stderr truncation metadata on ripgrep backend errors", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-stderr-truncated-");
+    try {
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          stderr: "bad",
+          exitCode: 2,
+          stderrTruncated: true
+        })
+      );
+
+      const result = await createGlobTool({ backend }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "bad",
+        isError: true,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          stdoutTruncated: false,
+          stderrTruncated: true,
+          exitCode: 2
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("drops a partial final stdout line when ripgrep output is truncated", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-partial-line-");
+    try {
+      writeFileSync(join(cwd, "complete.ts"), "complete\n", "utf8");
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          stdout: "complete.ts\npart",
+          stdoutTruncated: true
+        })
+      );
+
+      const result = await createGlobTool({ backend }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "complete.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          matchedFileCount: 1,
+          truncated: true,
+          stdoutTruncated: true
+        }
+      });
+      expect(result.output).not.toContain("part");
     } finally {
       await removeTempProject(cwd);
     }

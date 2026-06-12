@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { glob as tinyGlob } from "tinyglobby";
 import type { ToolDefinition } from "../definition.js";
@@ -38,6 +38,15 @@ interface GlobMatchResult {
   readonly backendOutputTruncated: boolean;
   readonly stdoutTruncated?: boolean;
   readonly stderrTruncated?: boolean;
+}
+
+class GlobToolExecutionError extends Error {
+  constructor(
+    message: string,
+    readonly metadata: Readonly<Record<string, unknown>>
+  ) {
+    super(message);
+  }
 }
 
 export function createGlobTool(
@@ -153,7 +162,8 @@ export function createGlobTool(
           tool: "glob",
           ...(root === undefined ? {} : { root }),
           pattern: globInput.pattern,
-          durationMs: Date.now() - startedAt
+          durationMs: Date.now() - startedAt,
+          ...(error instanceof GlobToolExecutionError ? error.metadata : {})
         });
       }
     }
@@ -243,23 +253,30 @@ async function ripgrepGlob(
   );
 
   if (result.timedOut) {
-    throw new Error(`glob timed out after ${timeoutMs}ms`);
+    throw createRipgrepError(
+      `glob timed out after ${timeoutMs}ms`,
+      result
+    );
   }
 
   if (result.aborted) {
-    throw new Error("glob was aborted");
+    throw createRipgrepError("glob was aborted", result);
   }
 
   if (isRipgrepFileListSuccess(result)) {
     return {
-      paths: normalizeMatchedPaths(root, result.stdout).slice(0, limit),
+      paths: (
+        await normalizeMatchedPaths(root, result.stdout, {
+          dropIncompleteFinalLine: result.stdoutTruncated
+        })
+      ).slice(0, limit),
       backendOutputTruncated: result.stdoutTruncated,
       stdoutTruncated: result.stdoutTruncated,
       stderrTruncated: result.stderrTruncated
     };
   }
 
-  throw new Error(result.stderr.trim() || "ripgrep glob failed");
+  throw createRipgrepError(result.stderr.trim() || "ripgrep glob failed", result);
 }
 
 function isRipgrepFileListSuccess(result: RipgrepBackendResult): boolean {
@@ -271,7 +288,7 @@ function isRipgrepFileListSuccess(result: RipgrepBackendResult): boolean {
     return true;
   }
 
-  return result.stdoutTruncated;
+  return result.stdoutTruncated && result.stderr.trim().length === 0;
 }
 
 async function fallbackGlob(
@@ -282,33 +299,73 @@ async function fallbackGlob(
   const paths = await tinyGlob(pattern, {
     cwd: root,
     onlyFiles: true,
-    dot: true
+    dot: true,
+    followSymbolicLinks: false
   });
 
   return {
-    paths: paths
-      .map((match) => normalizeMatchedPath(root, match))
-      .sort()
-      .slice(0, limit),
+    paths: (await normalizeMatchedPathList(root, paths)).slice(0, limit),
     backendOutputTruncated: false
   };
 }
 
-function normalizeMatchedPaths(root: string, output: string): string[] {
-  return output
+async function normalizeMatchedPaths(
+  root: string,
+  output: string,
+  options: { readonly dropIncompleteFinalLine?: boolean } = {}
+): Promise<string[]> {
+  const lines = output
     .split(/\r?\n/u)
-    .filter((line) => line.length > 0)
-    .map((line) => normalizeMatchedPath(root, line))
+    .filter((line) => line.length > 0);
+
+  if (
+    options.dropIncompleteFinalLine === true &&
+    output.length > 0 &&
+    !output.endsWith("\n") &&
+    !output.endsWith("\r\n")
+  ) {
+    lines.pop();
+  }
+
+  const normalizedPaths = await Promise.all(
+    lines.map((line) => normalizeMatchedPath(root, line))
+  );
+
+  return normalizedPaths
+    .filter((line): line is string => line !== undefined)
     .sort();
 }
 
-function normalizeMatchedPath(root: string, projectPath: string): string {
+async function normalizeMatchedPathList(
+  root: string,
+  paths: readonly string[]
+): Promise<string[]> {
+  const normalizedPaths = await Promise.all(
+    paths.map((line) => normalizeMatchedPath(root, line))
+  );
+
+  return normalizedPaths
+    .filter((line): line is string => line !== undefined)
+    .sort();
+}
+
+async function normalizeMatchedPath(
+  root: string,
+  projectPath: string
+): Promise<string | undefined> {
   const normalized = normalizeProjectPath(projectPath);
   const relativePath = normalized.startsWith("./")
     ? normalized.slice(2)
     : normalized;
 
-  assertSafeRelativeMatch(root, relativePath);
+  if (!isSafeRelativeMatch(root, relativePath)) {
+    return undefined;
+  }
+
+  const realMatchedPath = await realpath(path.resolve(root, relativePath));
+  if (!isInsideRoot(root, realMatchedPath)) {
+    return undefined;
+  }
 
   return relativePath;
 }
@@ -325,33 +382,50 @@ function isSafeRelativeGlobPattern(pattern: string): boolean {
   return !splitPathSegments(pattern).some((segment) => segment.includes(".."));
 }
 
-function assertSafeRelativeMatch(root: string, projectPath: string): void {
+function isSafeRelativeMatch(root: string, projectPath: string): boolean {
   if (
     path.isAbsolute(projectPath) ||
     path.posix.isAbsolute(projectPath) ||
     path.win32.isAbsolute(projectPath)
   ) {
-    throw new Error("glob backend returned an absolute path");
+    return false;
   }
 
   if (splitPathSegments(projectPath).some((segment) => segment.includes(".."))) {
-    throw new Error("glob backend returned a path outside root");
+    return false;
   }
 
   const resolvedPath = path.resolve(root, projectPath);
-  const relativeToRoot = path.relative(root, resolvedPath);
 
-  if (
-    relativeToRoot === ".." ||
-    relativeToRoot.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativeToRoot)
-  ) {
-    throw new Error("glob backend returned a path outside root");
-  }
+  return isInsideRoot(root, resolvedPath);
+}
+
+function isInsideRoot(root: string, projectPath: string): boolean {
+  const relativeToRoot = path.relative(root, projectPath);
+
+  return (
+    relativeToRoot.length === 0 ||
+    (!relativeToRoot.startsWith(`..${path.sep}`) &&
+      relativeToRoot !== ".." &&
+      !path.isAbsolute(relativeToRoot))
+  );
 }
 
 function splitPathSegments(projectPath: string): string[] {
   return projectPath.split(/[\\/]+/u).filter((segment) => segment.length > 0);
+}
+
+function createRipgrepError(
+  message: string,
+  result: RipgrepBackendResult
+): GlobToolExecutionError {
+  return new GlobToolExecutionError(message, {
+    backend: "ripgrep",
+    exitCode: result.exitCode,
+    signal: result.signal,
+    stdoutTruncated: result.stdoutTruncated,
+    stderrTruncated: result.stderrTruncated
+  });
 }
 
 function errorToMessage(error: unknown): string {
