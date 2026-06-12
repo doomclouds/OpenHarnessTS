@@ -76,7 +76,7 @@ export function collectEnvironmentInfo(
 
   return {
     osName: type(),
-    osVersion: `${platform()} ${release()}`,
+    osVersion: release(),
     platformMachine: arch(),
     shell,
     cwd,

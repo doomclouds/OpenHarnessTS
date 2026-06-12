@@ -6,7 +6,7 @@ import {
   rmSync,
   writeFileSync
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { release as osRelease, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -70,6 +70,8 @@ describe("collectEnvironmentInfo", () => {
       expect(info.cwd).toBe(directory);
       expect(info.nodeVersion).toBe(process.version);
       expect(info.nodeExecutable).toBe(process.execPath);
+      expect(info.osVersion).toBe(osRelease());
+      expect(info.osVersion).not.toContain(process.platform);
       expect(info.shell).toBe("pwsh");
       expect(info.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(info.isGitRepo).toBe(false);
