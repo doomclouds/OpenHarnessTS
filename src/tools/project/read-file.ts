@@ -200,24 +200,40 @@ async function readCappedFile(
   const file = await open(resolvedPath, "r");
 
   try {
-    const buffer = Buffer.allocUnsafe(maxReadFileBytes + 1);
-    const { bytesRead } = await file.read(
-      buffer,
-      0,
-      maxReadFileBytes + 1,
-      0
-    );
+    const chunks: Buffer[] = [];
+    let totalBytesRead = 0;
+    let position = 0;
 
-    if (bytesRead > maxReadFileBytes) {
-      return {
-        ok: false,
-        fileSizeBytes: Math.max(statSizeBytes, bytesRead)
-      };
+    while (totalBytesRead <= maxReadFileBytes) {
+      const bytesRemainingBeforeOverflow =
+        maxReadFileBytes + 1 - totalBytesRead;
+      const buffer = Buffer.allocUnsafe(bytesRemainingBeforeOverflow);
+      const { bytesRead } = await file.read(
+        buffer,
+        0,
+        bytesRemainingBeforeOverflow,
+        position
+      );
+
+      if (bytesRead === 0) {
+        break;
+      }
+
+      chunks.push(buffer.subarray(0, bytesRead));
+      totalBytesRead += bytesRead;
+      position += bytesRead;
+
+      if (totalBytesRead > maxReadFileBytes) {
+        return {
+          ok: false,
+          fileSizeBytes: Math.max(statSizeBytes, totalBytesRead)
+        };
+      }
     }
 
     return {
       ok: true,
-      buffer: buffer.subarray(0, bytesRead)
+      buffer: Buffer.concat(chunks, totalBytesRead)
     };
   } finally {
     await file.close();

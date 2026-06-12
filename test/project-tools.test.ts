@@ -18,6 +18,8 @@ import {
 } from "../src/tools/index.js";
 import type { ReadFileToolInput } from "../src/tools/index.js";
 
+const readFileMaxBytes = 1024 * 1024;
+
 async function makeTempProject(prefix: string): Promise<string> {
   return await mkdtemp(join(tmpdir(), prefix));
 }
@@ -72,6 +74,59 @@ async function executeReadFileTool(
     },
     { cwd, metadata: {} }
   );
+}
+
+async function executeReadFileWithMockedReadSizes(
+  readSizes: readonly number[]
+) {
+  vi.resetModules();
+
+  const maxBytes = readFileMaxBytes;
+  const resolvedPath = "C:\\project\\growing.txt";
+  let readIndex = 0;
+  const read = vi.fn(async (buffer: Buffer) => {
+    const bytesRead = readSizes[readIndex] ?? 0;
+    readIndex += 1;
+    buffer.fill(0x61, 0, bytesRead);
+
+    return {
+      bytesRead,
+      buffer
+    };
+  });
+  const close = vi.fn(async () => undefined);
+
+  vi.doMock("node:fs/promises", () => ({
+    realpath: vi.fn(async (path: string) => path),
+    stat: vi.fn(async () => ({
+      size: 1,
+      isDirectory: () => false,
+      isFile: () => true
+    })),
+    open: vi.fn(async () => ({ read, close }))
+  }));
+
+  try {
+    const { createReadFileTool: createMockedReadFileTool } = await import(
+      "../src/tools/project/read-file.js"
+    );
+
+    const result = await createMockedReadFileTool().execute(
+      { path: "growing.txt" },
+      { cwd: "C:\\project", metadata: {} }
+    );
+
+    return {
+      result,
+      read,
+      close,
+      maxBytes,
+      resolvedPath
+    };
+  } finally {
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+  }
 }
 
 describe("project tool path helpers", () => {
@@ -691,58 +746,60 @@ describe("read_file project tool", () => {
     }
   });
 
-  it("rejects files that exceed the read size limit after stat", async () => {
-    vi.resetModules();
+  it("rejects a short capped read followed by one byte over the limit", async () => {
+    const { result, read, close, maxBytes, resolvedPath } =
+      await executeReadFileWithMockedReadSizes([readFileMaxBytes, 1]);
 
-    const maxBytes = 1024 * 1024;
-    const resolvedPath = "C:\\project\\growing.txt";
-    const read = vi.fn(async (buffer: Buffer) => {
-      buffer.fill(0x61, 0, maxBytes + 1);
-
-      return {
-        bytesRead: maxBytes + 1,
-        buffer
-      };
+    expect(result).toMatchObject({
+      output: expect.stringContaining("exceeds read_file size limit"),
+      isError: true,
+      metadata: {
+        tool: "read_file",
+        resolvedPath,
+        fileSizeBytes: maxBytes + 1,
+        maxBytes
+      }
     });
-    const close = vi.fn(async () => undefined);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 
-    vi.doMock("node:fs/promises", () => ({
-      realpath: vi.fn(async (path: string) => path),
-      stat: vi.fn(async () => ({
-        size: 1,
-        isDirectory: () => false,
-        isFile: () => true
-      })),
-      open: vi.fn(async () => ({ read, close })),
-      readFile: vi.fn(async () => Buffer.from("small"))
-    }));
+  it("allows exactly max bytes followed by EOF", async () => {
+    const { result, read, close } =
+      await executeReadFileWithMockedReadSizes([readFileMaxBytes, 0]);
 
-    try {
-      const { createReadFileTool: createMockedReadFileTool } = await import(
-        "../src/tools/project/read-file.js"
-      );
+    expect(result.isError).toBe(false);
+    expect(result.output.startsWith("     1\t")).toBe(true);
+    expect(result.metadata).toMatchObject({
+      tool: "read_file",
+      lineCount: 1,
+      returnedLineCount: 1,
+      truncated: false,
+      binary: false
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
 
-      const result = await createMockedReadFileTool().execute(
-        { path: "growing.txt" },
-        { cwd: "C:\\project", metadata: {} }
-      );
+  it("allows a short read followed by EOF", async () => {
+    const { result, read, close } = await executeReadFileWithMockedReadSizes([
+      5,
+      0
+    ]);
 
-      expect(result).toMatchObject({
-        output: expect.stringContaining("exceeds read_file size limit"),
-        isError: true,
-        metadata: {
-          tool: "read_file",
-          resolvedPath,
-          fileSizeBytes: maxBytes + 1,
-          maxBytes
-        }
-      });
-      expect(read).toHaveBeenCalledTimes(1);
-      expect(close).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.doUnmock("node:fs/promises");
-      vi.resetModules();
-    }
+    expect(result).toMatchObject({
+      output: "     1\taaaaa",
+      isError: false,
+      metadata: {
+        tool: "read_file",
+        lineCount: 1,
+        returnedLineCount: 1,
+        truncated: false,
+        binary: false
+      }
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("rejects symlink escapes when symlinks are supported", async () => {
