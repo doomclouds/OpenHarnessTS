@@ -342,3 +342,20 @@ alpha
 \`\`\``);
   });
 });
+
+describe("project instruction root exports", () => {
+  it("exports project instruction helpers from root and prompt modules by reference", async () => {
+    const rootExports = await import("../src/index.js");
+    const promptExports = await import("../src/prompts/index.js");
+
+    expect(rootExports.discoverProjectInstructions).toBe(
+      promptExports.discoverProjectInstructions
+    );
+    expect(rootExports.loadProjectInstructions).toBe(
+      promptExports.loadProjectInstructions
+    );
+    expect(rootExports.formatProjectInstructionsSection).toBe(
+      promptExports.formatProjectInstructionsSection
+    );
+  });
+});
