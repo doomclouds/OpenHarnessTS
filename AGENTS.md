@@ -1,4 +1,4 @@
-# OpenHarnessTS Agent Instructions
+# OpenHarness Agent Instructions
 
 ## 项目目标
 
@@ -6,7 +6,9 @@
 
 参考项目位于根目录下的 `OpenHarness/`，它是 Python 版 OpenHarness 的本地参考副本，只用于阅读、对照和架构迁移，不纳入本仓库 Git 管理，也不要在常规开发中修改它。
 
-OpenHarnessTS 的目标不是机械翻译 Python 代码，而是用 TypeScript/Node.js 生态重新实现一套轻量、可扩展、可检查的 Agent Harness 基础设施，核心能力包括：
+项目对外名称统一使用 **OpenHarness**。`OpenHarnessTS` 只作为当前仓库目录名或必要的工程区分名称；面向用户、文档、系统提示词、运行时身份和产品语义时，不要写成 “OpenHarnessTS” 或 “OpenHarness TS”，而应写成 “OpenHarness 的 TypeScript 版本/实现”。
+
+OpenHarness 的 TypeScript 版本目标不是机械翻译 Python 代码，而是用 TypeScript/Node.js 生态重新实现一套轻量、可扩展、可检查的 Agent Harness 基础设施，核心能力包括：
 
 - agent loop：消息、模型响应、工具调用、流式事件与循环控制
 - tools：工具定义、JSON schema、执行上下文、结果封装
