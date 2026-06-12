@@ -266,6 +266,24 @@ describe("ripgrep backend", () => {
     }
   });
 
+  it("truncates non-ASCII stdout on utf8 boundaries", async () => {
+    const cwd = await makeTempProject("openharness-rg-stdout-utf8-limit-");
+    try {
+      writeFileSync(join(cwd, "unicode.txt"), "中文\n", "utf8");
+
+      const result = await createRipgrepBackend().run(
+        ["--color", "never", "--no-filename", "--only-matching", "中文", "."],
+        { cwd, timeoutMs: 5000, maxStdoutBytes: 1 }
+      );
+
+      expect(result.stdoutTruncated).toBe(true);
+      expect(result.stdout).not.toContain("\uFFFD");
+      expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(1);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("truncates stderr and stops the child when stderr exceeds its limit", async () => {
     const cwd = await makeTempProject("openharness-rg-stderr-limit-");
     try {
@@ -280,6 +298,22 @@ describe("ripgrep backend", () => {
       expect(result.timedOut).toBe(false);
       expect(result.aborted).toBe(false);
       expectNonSuccessTermination(result);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("truncates non-ASCII stderr on utf8 boundaries", async () => {
+    const cwd = await makeTempProject("openharness-rg-stderr-utf8-limit-");
+    try {
+      const result = await createRipgrepBackend().run(
+        ["--files", "--color", "never", "不存在"],
+        { cwd, timeoutMs: 5000, maxStderrBytes: 5 }
+      );
+
+      expect(result.stderrTruncated).toBe(true);
+      expect(result.stderr).not.toContain("\uFFFD");
+      expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(5);
     } finally {
       await removeTempProject(cwd);
     }

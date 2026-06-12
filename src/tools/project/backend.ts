@@ -177,7 +177,55 @@ function createOutputCollector(
     },
 
     toString() {
-      return Buffer.concat(chunks).toString("utf8");
+      const output = Buffer.concat(chunks);
+      const safeOutput = truncated
+        ? output.subarray(0, findUtf8SafePrefixLength(output))
+        : output;
+
+      return safeOutput.toString("utf8");
     }
   };
+}
+
+function findUtf8SafePrefixLength(buffer: Buffer): number {
+  if (buffer.byteLength === 0) {
+    return 0;
+  }
+
+  let sequenceStart = buffer.byteLength - 1;
+  while (
+    sequenceStart >= 0 &&
+    (buffer[sequenceStart]! & 0b1100_0000) === 0b1000_0000
+  ) {
+    sequenceStart -= 1;
+  }
+
+  if (sequenceStart < 0) {
+    return 0;
+  }
+
+  const sequenceLength = getUtf8SequenceLength(buffer[sequenceStart]!);
+  const availableBytes = buffer.byteLength - sequenceStart;
+
+  return availableBytes >= sequenceLength ? buffer.byteLength : sequenceStart;
+}
+
+function getUtf8SequenceLength(byte: number): number {
+  if (byte < 0x80) {
+    return 1;
+  }
+
+  if (byte >= 0xc2 && byte <= 0xdf) {
+    return 2;
+  }
+
+  if (byte >= 0xe0 && byte <= 0xef) {
+    return 3;
+  }
+
+  if (byte >= 0xf0 && byte <= 0xf4) {
+    return 4;
+  }
+
+  return 1;
 }
