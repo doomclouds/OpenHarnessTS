@@ -1,8 +1,11 @@
+import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
 import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
+import { describe, expect, it, vi } from "vitest";
 import {
   createRipgrepBackend,
   normalizeProjectPath,
@@ -36,6 +39,17 @@ function expectNonSuccessTermination(result: {
       ? typeof result.signal === "string"
       : result.exitCode !== 0
   ).toBe(true);
+}
+
+class FakeChildProcess extends EventEmitter {
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+  killed = false;
+
+  kill(): boolean {
+    this.killed = true;
+    return true;
+  }
 }
 
 describe("project tool path helpers", () => {
@@ -335,6 +349,80 @@ describe("ripgrep backend", () => {
       expect(result.timedOut).toBe(false);
     } finally {
       await removeTempProject(cwd);
+    }
+  });
+
+  it("does not let late abort override a completed process before close", async () => {
+    vi.resetModules();
+
+    const controller = new AbortController();
+    const fakeChild = new FakeChildProcess();
+
+    vi.doMock("node:child_process", () => ({
+      spawn: vi.fn(() => fakeChild)
+    }));
+
+    try {
+      const { createRipgrepBackend: createMockedBackend } = await import(
+        "../src/tools/project/backend.js"
+      );
+      const resultPromise = createMockedBackend().run(["--files"], {
+        cwd: ".",
+        timeoutMs: 5000,
+        signal: controller.signal
+      });
+
+      fakeChild.emit("exit", 0, null);
+      controller.abort();
+      fakeChild.emit("close", 0, null);
+      fakeChild.stdout.end();
+      fakeChild.stderr.end();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        aborted: false
+      });
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
+  it("does not let late timeout override a completed process before close", async () => {
+    vi.resetModules();
+
+    const fakeChild = new FakeChildProcess();
+
+    vi.doMock("node:child_process", () => ({
+      spawn: vi.fn(() => fakeChild)
+    }));
+
+    try {
+      const { createRipgrepBackend: createMockedBackend } = await import(
+        "../src/tools/project/backend.js"
+      );
+      const resultPromise = createMockedBackend().run(["--files"], {
+        cwd: ".",
+        timeoutMs: 1
+      });
+
+      fakeChild.emit("exit", 0, null);
+      await delay(10);
+      fakeChild.emit("close", 0, null);
+      fakeChild.stdout.end();
+      fakeChild.stderr.end();
+
+      await expect(resultPromise).resolves.toMatchObject({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        aborted: false
+      });
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
     }
   });
 });

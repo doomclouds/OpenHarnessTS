@@ -38,6 +38,7 @@ export function createRipgrepBackend(): RipgrepBackend {
     run(args, options) {
       const startedAt = Date.now();
       let terminationReason: TerminationReason | undefined;
+      let processCompleted = false;
       let settled = false;
       let timeout: NodeJS.Timeout | undefined;
       const maxStdoutBytes = normalizeMaxBytes(options.maxStdoutBytes);
@@ -57,6 +58,10 @@ export function createRipgrepBackend(): RipgrepBackend {
       };
 
       const requestTermination = (reason: TerminationReason): void => {
+        if (processCompleted) {
+          return;
+        }
+
         terminationReason ??= reason;
         killChild();
       };
@@ -80,6 +85,18 @@ export function createRipgrepBackend(): RipgrepBackend {
         requestTermination("abort");
       };
 
+      const cleanupPendingTermination = (): void => {
+        clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", onAbort);
+      };
+
+      const onExit = (): void => {
+        if (terminationReason === undefined) {
+          processCompleted = true;
+          cleanupPendingTermination();
+        }
+      };
+
       return new Promise<RipgrepBackendResult>((resolve) => {
         const finish = (
           exitCode: number | null,
@@ -90,8 +107,7 @@ export function createRipgrepBackend(): RipgrepBackend {
           }
 
           settled = true;
-          clearTimeout(timeout);
-          options.signal?.removeEventListener("abort", onAbort);
+          cleanupPendingTermination();
 
           resolve({
             backend: "ripgrep",
@@ -112,6 +128,7 @@ export function createRipgrepBackend(): RipgrepBackend {
           finish(null, null);
         });
 
+        child.once("exit", onExit);
         child.on("close", finish);
 
         if (options.signal?.aborted === true) {
