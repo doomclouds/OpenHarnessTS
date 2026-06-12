@@ -1128,6 +1128,70 @@ describe("glob project tool", () => {
     }
   });
 
+  it("rejects escaping glob patterns through the registry", async () => {
+    const cwd = await makeTempProject("openharness-glob-pattern-escape-");
+    try {
+      for (const input of [
+        { pattern: "../*.txt" },
+        { path: "../*.txt" },
+        { pattern: "**/../*" },
+        { pattern: "/absolute/*.txt" }
+      ]) {
+        const result = await executeGlobTool(cwd, input);
+
+        expect(result).toMatchObject({
+          output: expect.stringContaining("Invalid input for glob"),
+          isError: true
+        });
+        expect(result.output).toContain("glob pattern must stay within root");
+      }
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("does not return outside-root paths through fallback execution", async () => {
+    const cwd = await makeTempProject("openharness-glob-fallback-escape-cwd-");
+    const outside = await makeTempProject("openharness-glob-fallback-escape-out-");
+    try {
+      writeFileSync(join(outside, "outside.txt"), "outside\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "../*.txt" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("glob pattern must stay within root");
+      expect(result.output).not.toContain("outside.txt");
+      expect(result.metadata).toMatchObject({ tool: "glob" });
+    } finally {
+      await removeTempProject(cwd);
+      await removeTempProject(outside);
+    }
+  });
+
+  it("does not run ripgrep for outside-root patterns", async () => {
+    const cwd = await makeTempProject("openharness-glob-rg-escape-cwd-");
+    const outside = await makeTempProject("openharness-glob-rg-escape-out-");
+    try {
+      writeFileSync(join(outside, "outside.txt"), "outside\n", "utf8");
+
+      const result = await createGlobTool().execute(
+        { pattern: "../*.txt" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.output).toContain("glob pattern must stay within root");
+      expect(result.output).not.toContain("outside.txt");
+      expect(result.metadata).toMatchObject({ tool: "glob" });
+    } finally {
+      await removeTempProject(cwd);
+      await removeTempProject(outside);
+    }
+  });
+
   it("validates empty pattern, bad limit, additional properties, and schema integer limit", async () => {
     const cwd = await makeTempProject("openharness-glob-validation-");
     try {

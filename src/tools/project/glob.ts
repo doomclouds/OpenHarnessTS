@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import path from "node:path";
 import { glob as tinyGlob } from "tinyglobby";
 import type { ToolDefinition } from "../definition.js";
 import { createToolErrorResult, createToolResult } from "../results.js";
@@ -194,6 +195,10 @@ function validateGlobToolInput(input: unknown):
     return { ok: false, error: "pattern must be a non-empty string" };
   }
 
+  if (!isSafeRelativeGlobPattern(effectivePattern)) {
+    return { ok: false, error: "glob pattern must stay within root" };
+  }
+
   if (candidate.root !== undefined && typeof candidate.root !== "string") {
     return { ok: false, error: "root must be a string" };
   }
@@ -247,7 +252,7 @@ async function ripgrepGlob(
 
   if (isRipgrepFileListSuccess(result)) {
     return {
-      paths: normalizeMatchedPaths(result.stdout).slice(0, limit),
+      paths: normalizeMatchedPaths(root, result.stdout).slice(0, limit),
       backendOutputTruncated: result.stdoutTruncated,
       stdoutTruncated: result.stdoutTruncated,
       stderrTruncated: result.stderrTruncated
@@ -281,23 +286,72 @@ async function fallbackGlob(
   });
 
   return {
-    paths: paths.map(normalizeMatchedPath).sort().slice(0, limit),
+    paths: paths
+      .map((match) => normalizeMatchedPath(root, match))
+      .sort()
+      .slice(0, limit),
     backendOutputTruncated: false
   };
 }
 
-function normalizeMatchedPaths(output: string): string[] {
+function normalizeMatchedPaths(root: string, output: string): string[] {
   return output
     .split(/\r?\n/u)
     .filter((line) => line.length > 0)
-    .map(normalizeMatchedPath)
+    .map((line) => normalizeMatchedPath(root, line))
     .sort();
 }
 
-function normalizeMatchedPath(projectPath: string): string {
+function normalizeMatchedPath(root: string, projectPath: string): string {
   const normalized = normalizeProjectPath(projectPath);
+  const relativePath = normalized.startsWith("./")
+    ? normalized.slice(2)
+    : normalized;
 
-  return normalized.startsWith("./") ? normalized.slice(2) : normalized;
+  assertSafeRelativeMatch(root, relativePath);
+
+  return relativePath;
+}
+
+function isSafeRelativeGlobPattern(pattern: string): boolean {
+  if (
+    path.isAbsolute(pattern) ||
+    path.posix.isAbsolute(pattern) ||
+    path.win32.isAbsolute(pattern)
+  ) {
+    return false;
+  }
+
+  return !splitPathSegments(pattern).some((segment) => segment.includes(".."));
+}
+
+function assertSafeRelativeMatch(root: string, projectPath: string): void {
+  if (
+    path.isAbsolute(projectPath) ||
+    path.posix.isAbsolute(projectPath) ||
+    path.win32.isAbsolute(projectPath)
+  ) {
+    throw new Error("glob backend returned an absolute path");
+  }
+
+  if (splitPathSegments(projectPath).some((segment) => segment.includes(".."))) {
+    throw new Error("glob backend returned a path outside root");
+  }
+
+  const resolvedPath = path.resolve(root, projectPath);
+  const relativeToRoot = path.relative(root, resolvedPath);
+
+  if (
+    relativeToRoot === ".." ||
+    relativeToRoot.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeToRoot)
+  ) {
+    throw new Error("glob backend returned a path outside root");
+  }
+}
+
+function splitPathSegments(projectPath: string): string[] {
+  return projectPath.split(/[\\/]+/u).filter((segment) => segment.length > 0);
 }
 
 function errorToMessage(error: unknown): string {
