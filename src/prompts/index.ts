@@ -24,3 +24,8 @@ export type {
   ProjectInstructionKind,
   ProjectInstructions
 } from "./project-instructions.js";
+export { buildRuntimePrompt } from "./runtime-prompt.js";
+export type {
+  BuildRuntimePromptOptions,
+  RuntimePromptResult
+} from "./runtime-prompt.js";

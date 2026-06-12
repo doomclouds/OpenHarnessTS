@@ -358,6 +358,21 @@ describe("buildRuntimePrompt", () => {
     expect(result.prompt).not.toContain("# Project Instructions");
   });
 
+  it("does not load project instructions for systemPrompt full override unless injected", () => {
+    const result = buildRuntimePrompt({
+      cwd: environment.cwd,
+      environment,
+      systemPrompt: "Exact runtime prompt.",
+      instructionOptions: {
+        maxCharsPerFile: 0
+      }
+    });
+
+    expect(result.prompt).toBe("Exact runtime prompt.");
+    expect(result.systemPrompt).toBe("Exact runtime prompt.");
+    expect(result.projectInstructions).toBeUndefined();
+  });
+
   it("rejects conflicting system prompt override modes", () => {
     expect(() =>
       buildRuntimePrompt({
