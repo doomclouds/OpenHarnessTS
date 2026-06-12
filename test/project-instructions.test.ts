@@ -7,7 +7,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   discoverProjectInstructions,
   type ProjectInstructionFile
@@ -79,6 +79,52 @@ describe("discoverProjectInstructions", () => {
 
       expect(discoverProjectInstructions(pathToFileURL(repo), { stopAt: repo })).toEqual([]);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips claude rules when the rules directory cannot be listed", async () => {
+    const root = makeTempProject("openharness-instructions-rules-probe-");
+
+    try {
+      const repo = join(root, "repo");
+      const rules = join(repo, ".claude", "rules");
+      mkdirSync(rules, { recursive: true });
+      writeText(join(repo, "AGENTS.md"), "repo agents");
+      writeText(join(rules, "hidden.md"), "unreadable rule");
+
+      vi.resetModules();
+      vi.doMock("node:fs", async (importOriginal) => {
+        const actual = await importOriginal<typeof import("node:fs")>();
+        const actualReaddirSync = actual.readdirSync as (
+          path: Parameters<typeof actual.readdirSync>[0],
+          options?: unknown
+        ) => unknown;
+        const readdirSync = ((path, options?: unknown) => {
+          if (resolve(String(path)) === resolve(rules)) {
+            throw Object.assign(new Error("EACCES: permission denied"), {
+              code: "EACCES"
+            });
+          }
+
+          return actualReaddirSync(path, options);
+        }) as typeof actual.readdirSync;
+
+        return {
+          ...actual,
+          readdirSync
+        };
+      });
+
+      const { discoverProjectInstructions: discoverWithFailingReaddir } =
+        await import("../src/prompts/project-instructions.js");
+
+      expect(paths(discoverWithFailingReaddir(repo, { stopAt: repo }))).toEqual([
+        resolve(repo, "AGENTS.md")
+      ]);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
       rmSync(root, { recursive: true, force: true });
     }
   });

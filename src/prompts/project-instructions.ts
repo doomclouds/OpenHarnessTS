@@ -1,5 +1,5 @@
 import {
-  existsSync,
+  type Dirent,
   readdirSync,
   statSync
 } from "node:fs";
@@ -128,7 +128,14 @@ function sortedMarkdownFiles(directory: string): readonly string[] {
     return [];
   }
 
-  return readdirSync(directory, { withFileTypes: true })
+  let entries: Array<Dirent<string>>;
+  try {
+    entries = readdirSync(directory, { encoding: "utf8", withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
     .map((entry) => entry.name)
     .sort(comparePathNames);
@@ -173,11 +180,19 @@ function pathKey(path: string): string {
 }
 
 function isFile(path: string): boolean {
-  return existsSync(path) && statSync(path).isFile();
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function isDirectory(path: string): boolean {
-  return existsSync(path) && statSync(path).isDirectory();
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function comparePathNames(left: string, right: string): number {
