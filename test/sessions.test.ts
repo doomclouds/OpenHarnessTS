@@ -350,7 +350,11 @@ describe("session snapshot filesystem persistence", () => {
     try {
       const events = await collectEvents(engine.submitMessage("save me"));
       const complete = events.find((event) => event.type === "assistant_turn_complete");
-      const usage = complete?.type === "assistant_turn_complete" ? complete.usage : undefined;
+      expect(complete?.type).toBe("assistant_turn_complete");
+      if (complete?.type !== "assistant_turn_complete" || complete.usage === undefined) {
+        throw new Error("Expected completed assistant turn with usage.");
+      }
+      const usage: UsageSnapshot = complete.usage;
 
       const snapshot = await saveQueryEngineSnapshot({
         engine,
