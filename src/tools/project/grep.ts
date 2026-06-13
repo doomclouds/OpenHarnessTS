@@ -667,7 +667,13 @@ function assertSafeFallbackPattern(pattern: string): void {
 }
 
 function hasPotentiallyCatastrophicFallbackPattern(pattern: string): boolean {
-  return /\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)[+*?{]/u.test(pattern);
+  return (
+    hasUnescaped(pattern, "|") ||
+    /\\[1-9]/u.test(pattern) ||
+    /\(\?<?[!=]/u.test(pattern) ||
+    /\((?:[^()\\]|\\.)+\)[+*?{]/u.test(pattern) ||
+    /\((?:[^()\\]|\\.)*[+*{](?:[^()\\]|\\.)*\)/u.test(pattern)
+  );
 }
 
 function addFallbackFileMatches(
@@ -1135,6 +1141,15 @@ function computeGrepStats(
   lines: readonly string[],
   outputMode: GrepOutputMode
 ): { readonly numFiles: number; readonly numMatches: number } {
+  if (outputMode === "files_with_matches") {
+    const files = new Set(lines.filter((line) => line.length > 0));
+
+    return {
+      numFiles: files.size,
+      numMatches: files.size
+    };
+  }
+
   if (outputMode === "count") {
     const countEntries = lines.map((line) => {
       const countSeparator = findNormalizedCountPathEnd(line);
@@ -1172,8 +1187,7 @@ function computeGrepStats(
 
   return {
     numFiles: files.size,
-    numMatches:
-      outputMode === "files_with_matches" ? files.size : contentMatches
+    numMatches: contentMatches
   };
 }
 
@@ -1231,6 +1245,28 @@ function toTinyglobbyPattern(pattern: string): string {
 
 function hasPathSeparator(pattern: string): boolean {
   return /[\\/]/u.test(pattern);
+}
+
+function hasUnescaped(value: string, character: string): boolean {
+  let escaped = false;
+
+  for (const current of value) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (current === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (current === character) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isGitInternalPath(projectPath: string): boolean {

@@ -2276,6 +2276,39 @@ describe("grep project tool", () => {
     }
   });
 
+  it("marks grep results truncated when backend stdout is truncated", async () => {
+    const cwd = await makeTempProject("openharness-grep-stdout-truncated-");
+    try {
+      writeFileSync(join(cwd, "a.txt"), "needle\n", "utf8");
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          stdout: "a.txt:1:needle\npartial",
+          stdoutTruncated: true
+        })
+      );
+
+      const result = await createGrepTool({ backend }).execute(
+        { pattern: "needle" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "a.txt:1:needle",
+        isError: false,
+        metadata: {
+          tool: "grep",
+          backend: "ripgrep",
+          numFiles: 1,
+          numMatches: 1,
+          truncated: true,
+          stdoutTruncated: true
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("passes expected args, cwd, timeout, and signal to the ripgrep backend", async () => {
     const cwd = await makeTempProject("openharness-grep-backend-options-");
     try {
@@ -2494,6 +2527,38 @@ describe("grep project tool", () => {
           fallbackReason: "spawn ENOENT"
         }
       });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("rejects complex fallback regex patterns before scanning files", async () => {
+    const cwd = await makeTempProject("openharness-grep-fallback-redos-");
+    try {
+      writeFileSync(join(cwd, "a.txt"), `${"a".repeat(100)}!\n`, "utf8");
+
+      for (const pattern of [
+        "(a|aa)+$",
+        "(a{1,})+$",
+        "(ab)+",
+        "(?=a)a",
+        "(a)\\1"
+      ]) {
+        const result = await createGrepTool({ disableRipgrep: true }).execute(
+          { pattern },
+          { cwd, metadata: {} }
+        );
+
+        expect(result).toMatchObject({
+          output: expect.stringContaining("unsupported fallback regex pattern"),
+          isError: true,
+          metadata: {
+            tool: "grep",
+            backend: "fallback",
+            timedOut: false
+          }
+        });
+      }
     } finally {
       await removeTempProject(cwd);
     }
@@ -2765,6 +2830,34 @@ describe("grep project tool", () => {
           appliedLimit: 1,
           appliedOffset: 1,
           truncated: true
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("counts files_with_matches paths as whole file names", async () => {
+    const cwd = await makeTempProject("openharness-grep-files-stats-");
+    try {
+      writeFileSync(join(cwd, "name-1-file.txt"), "needle\n", "utf8");
+
+      const result = await createGrepTool({ disableRipgrep: true }).execute(
+        {
+          pattern: "needle",
+          outputMode: "files_with_matches"
+        },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "name-1-file.txt",
+        isError: false,
+        metadata: {
+          tool: "grep",
+          backend: "fallback",
+          numFiles: 1,
+          numMatches: 1
         }
       });
     } finally {
