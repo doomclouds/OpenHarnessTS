@@ -2542,7 +2542,8 @@ describe("grep project tool", () => {
         "(a{1,})+$",
         "(ab)+",
         "(?=a)a",
-        "(a)\\1"
+        "(a)\\1",
+        "(?<x>a)\\k<x>"
       ]) {
         const result = await createGrepTool({ disableRipgrep: true }).execute(
           { pattern },

@@ -670,6 +670,7 @@ function hasPotentiallyCatastrophicFallbackPattern(pattern: string): boolean {
   return (
     hasUnescaped(pattern, "|") ||
     /\\[1-9]/u.test(pattern) ||
+    /\\k<[^>]+>/u.test(pattern) ||
     /\(\?<?[!=]/u.test(pattern) ||
     /\((?:[^()\\]|\\.)+\)[+*?{]/u.test(pattern) ||
     /\((?:[^()\\]|\\.)*[+*{](?:[^()\\]|\\.)*\)/u.test(pattern)
