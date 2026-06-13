@@ -1294,6 +1294,31 @@ describe("glob project tool", () => {
     }
   });
 
+  it("allows matched file names containing dot-dot without traversal", async () => {
+    const cwd = await makeTempProject("openharness-glob-dotdot-name-");
+    try {
+      writeFileSync(join(cwd, "foo..bar"), "ok\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "foo..bar" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "foo..bar",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          matchedFileCount: 1,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("fallback matches bare patterns against basenames without hidden files outside git repositories", async () => {
     const cwd = await makeTempProject("openharness-glob-bare-fallback-");
     try {
@@ -1929,7 +1954,6 @@ describe("glob project tool", () => {
         { pattern: "../*.txt" },
         { path: "../*.txt" },
         { pattern: "**/../*" },
-        { pattern: "foo..bar" },
         { pattern: "/absolute/*.txt" }
       ]) {
         const result = await executeGlobTool(cwd, input);
