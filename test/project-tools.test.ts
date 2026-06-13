@@ -965,18 +965,82 @@ describe("glob project tool", () => {
       );
 
       expect(result).toMatchObject({
-        output: ".hidden/dot.ts\nalpha.ts",
+        output: "alpha.ts",
         isError: false,
         metadata: {
           tool: "glob",
           backend: "ripgrep",
           root: cwd,
           pattern: "**/*.ts",
-          matchedFileCount: 2,
+          matchedFileCount: 1,
           truncated: false
         }
       });
       expect(result.metadata.durationMs).toEqual(expect.any(Number));
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("matches bare patterns against basenames without hidden files outside git repositories", async () => {
+    const cwd = await makeTempProject("openharness-glob-bare-rg-");
+    try {
+      mkdirSync(join(cwd, ".hidden"));
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "root.ts"), "root\n", "utf8");
+      writeFileSync(join(cwd, "src", "nested.ts"), "nested\n", "utf8");
+
+      const result = await createGlobTool().execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "root.ts\nsrc/nested.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 2,
+          truncated: false
+        }
+      });
+      expect(result.output).not.toContain(".hidden/dot.ts");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("includes hidden bare-pattern matches inside git repositories", async () => {
+    const cwd = await makeTempProject("openharness-glob-bare-git-rg-");
+    try {
+      mkdirSync(join(cwd, ".git"));
+      mkdirSync(join(cwd, ".hidden"));
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "root.ts"), "root\n", "utf8");
+      writeFileSync(join(cwd, "src", "nested.ts"), "nested\n", "utf8");
+
+      const result = await createGlobTool().execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".hidden/dot.ts\nroot.ts\nsrc/nested.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 3,
+          truncated: false
+        }
+      });
     } finally {
       await removeTempProject(cwd);
     }
@@ -1120,14 +1184,79 @@ describe("glob project tool", () => {
       );
 
       expect(result).toMatchObject({
-        output: ".hidden/dot.ts\nvisible.ts",
+        output: "visible.ts",
         isError: false,
         metadata: {
           tool: "glob",
           backend: "fallback",
           root: cwd,
           pattern: "**/*.ts",
+          matchedFileCount: 1,
+          truncated: false
+        }
+      });
+      expect(result.output).not.toContain(".hidden/dot.ts");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("fallback matches bare patterns against basenames without hidden files outside git repositories", async () => {
+    const cwd = await makeTempProject("openharness-glob-bare-fallback-");
+    try {
+      mkdirSync(join(cwd, ".hidden"));
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "root.ts"), "root\n", "utf8");
+      writeFileSync(join(cwd, "src", "nested.ts"), "nested\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "root.ts\nsrc/nested.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          root: cwd,
+          pattern: "*.ts",
           matchedFileCount: 2,
+          truncated: false
+        }
+      });
+      expect(result.output).not.toContain(".hidden/dot.ts");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("fallback includes hidden bare-pattern matches inside git repositories", async () => {
+    const cwd = await makeTempProject("openharness-glob-bare-git-fallback-");
+    try {
+      mkdirSync(join(cwd, ".git"));
+      mkdirSync(join(cwd, ".hidden"));
+      mkdirSync(join(cwd, "src"));
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "root.ts"), "root\n", "utf8");
+      writeFileSync(join(cwd, "src", "nested.ts"), "nested\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".hidden/dot.ts\nroot.ts\nsrc/nested.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 3,
           truncated: false
         }
       });
@@ -1182,6 +1311,7 @@ describe("glob project tool", () => {
   it("passes expected args, cwd, timeout, and signal to the ripgrep backend", async () => {
     const cwd = await makeTempProject("openharness-glob-backend-options-");
     try {
+      mkdirSync(join(cwd, ".git"));
       mkdirSync(join(cwd, "src"));
       writeFileSync(join(cwd, "src", "a.ts"), "a\n", "utf8");
       const backend = createFakeRipgrepBackend(
@@ -1274,7 +1404,9 @@ describe("glob project tool", () => {
     const cwd = await makeTempProject("openharness-glob-rg-spawn-fallback-");
     try {
       mkdirSync(join(cwd, ".hidden"));
+      mkdirSync(join(cwd, "src"));
       writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "src", "nested.ts"), "nested\n", "utf8");
       writeFileSync(join(cwd, "visible.ts"), "visible\n", "utf8");
       writeFileSync(join(cwd, "visible.txt"), "visible\n", "utf8");
       const backend = createFakeRipgrepBackend(
@@ -1286,23 +1418,24 @@ describe("glob project tool", () => {
       );
 
       const result = await createGlobTool({ backend }).execute(
-        { pattern: "**/*.ts" },
+        { pattern: "*.ts" },
         { cwd, metadata: {} }
       );
 
       expect(result).toMatchObject({
-        output: ".hidden/dot.ts\nvisible.ts",
+        output: "src/nested.ts\nvisible.ts",
         isError: false,
         metadata: {
           tool: "glob",
           backend: "fallback",
           root: cwd,
-          pattern: "**/*.ts",
+          pattern: "*.ts",
           matchedFileCount: 2,
           truncated: false,
           fallbackReason: "spawn ENOENT"
         }
       });
+      expect(result.output).not.toContain(".hidden/dot.ts");
     } finally {
       await removeTempProject(cwd);
     }

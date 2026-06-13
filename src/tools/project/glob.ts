@@ -122,14 +122,21 @@ export function createGlobTool(
           );
         }
 
+        const includeHidden = await isInsideGitRepository(root, context.cwd);
         const matchResult =
           options.disableRipgrep === true
-            ? await fallbackGlob(root, globInput.pattern, globInput.limit + 1)
+            ? await fallbackGlob(
+                root,
+                globInput.pattern,
+                globInput.limit + 1,
+                includeHidden
+              )
             : await ripgrepGlob(
                 backend,
                 root,
                 globInput.pattern,
                 globInput.limit + 1,
+                includeHidden,
                 timeoutMs,
                 context.signal
               );
@@ -243,11 +250,21 @@ async function ripgrepGlob(
   root: string,
   pattern: string,
   limit: number,
+  includeHidden: boolean,
   timeoutMs: number,
   signal: AbortSignal | undefined
 ): Promise<GlobMatchResult> {
+  const args = [
+    "--files",
+    ...(includeHidden ? ["--hidden"] : []),
+    "--color",
+    "never",
+    "--glob",
+    pattern,
+    "."
+  ];
   const result = await backend.run(
-    ["--files", "--hidden", "--color", "never", "--glob", pattern, "."],
+    args,
     {
       cwd: root,
       timeoutMs,
@@ -281,7 +298,13 @@ async function ripgrepGlob(
   }
 
   if (isRipgrepBackendCannotRun(result)) {
-    return await fallbackGlob(root, pattern, limit, result.stderr.trim());
+    return await fallbackGlob(
+      root,
+      pattern,
+      limit,
+      includeHidden,
+      result.stderr.trim()
+    );
   }
 
   throw createRipgrepError(result.stderr.trim() || "ripgrep glob failed", result);
@@ -308,12 +331,13 @@ async function fallbackGlob(
   root: string,
   pattern: string,
   limit: number,
+  includeHidden: boolean,
   fallbackReason?: string
 ): Promise<GlobMatchResult> {
-  const paths = await tinyGlob(pattern, {
+  const paths = await tinyGlob(toTinyglobbyPattern(pattern), {
     cwd: root,
     onlyFiles: true,
-    dot: true,
+    dot: includeHidden,
     followSymbolicLinks: false
   });
 
@@ -323,6 +347,56 @@ async function fallbackGlob(
     ...(fallbackReason === undefined ? {} : { fallbackReason }),
     backendOutputTruncated: false
   };
+}
+
+async function isInsideGitRepository(root: string, cwd: string): Promise<boolean> {
+  const boundary = await realpath(cwd);
+  let current = root;
+
+  while (isInsideRoot(boundary, current)) {
+    if (await hasGitMarker(current)) {
+      return true;
+    }
+
+    if (current === boundary) {
+      return false;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return false;
+    }
+
+    current = parent;
+  }
+
+  return false;
+}
+
+async function hasGitMarker(directory: string): Promise<boolean> {
+  try {
+    const gitMarker = await stat(path.join(directory, ".git"));
+
+    return gitMarker.isDirectory() || gitMarker.isFile();
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return false;
+    }
+
+    throw error;
+  }
+}
+
+function toTinyglobbyPattern(pattern: string): string {
+  return hasPathSeparator(pattern) ? pattern : `**/${pattern}`;
+}
+
+function hasPathSeparator(pattern: string): boolean {
+  return /[\\/]/u.test(pattern);
 }
 
 async function normalizeMatchedPaths(
