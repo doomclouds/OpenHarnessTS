@@ -155,6 +155,16 @@ docs/milestones/
 
 简单说：milestone 管方向和进度，Superpowers 管单个 slice 的设计、实施、归档和经验沉淀。
 
+## 技术债导航
+
+未解决技术债放在 `docs/technical-debt/`，和 `docs/milestones/`、`docs/superpowers/` 同级。它是项目级债务账本，不属于里程碑内容，也不替代 Superpowers 的 spec、plan、archive、problem 或 inbox。
+
+- 总索引：`docs/technical-debt/INDEX.md`
+- 目录按月份组织，例如 `docs/technical-debt/2026-06/`
+- 索引用表格展示技术债，并用独立 `Status` 列标记 `Open` / `Closed`
+
+评估当前里程碑下一个 slice、判断是否需要先还债、或回答“还有哪些债没处理”时，先查看 `docs/technical-debt/INDEX.md`。如果某条技术债影响当前 milestone 的验收边界，再把它作为 slice 选择或设计输入，而不是直接混入 milestone checklist。
+
 ## 验证要求
 
 完成代码改动后，至少运行与改动范围匹配的验证命令：
