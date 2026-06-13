@@ -130,7 +130,9 @@ export function createGlobTool(
                 root,
                 globInput.pattern,
                 globInput.limit + 1,
-                includeHidden
+                includeHidden,
+                timeoutMs,
+                context.signal
               )
             : await ripgrepGlob(
                 backend,
@@ -305,6 +307,8 @@ async function ripgrepGlob(
       pattern,
       limit,
       includeHidden,
+      timeoutMs,
+      signal,
       result.stderr.trim()
     );
   }
@@ -334,22 +338,126 @@ async function fallbackGlob(
   pattern: string,
   limit: number,
   includeHidden: boolean,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
   fallbackReason?: string
 ): Promise<GlobMatchResult> {
-  const paths = await tinyGlob(toTinyglobbyPattern(pattern), {
-    cwd: root,
-    onlyFiles: true,
-    dot: includeHidden,
-    ignore: gitInternalGlobExcludes.map((glob) => glob.slice(1)),
-    followSymbolicLinks: false
+  const { signal: fallbackSignal, timedOut, cleanup } =
+    createFallbackAbortSignal(timeoutMs, signal);
+
+  try {
+    throwIfAbortedOrTimedOut(fallbackSignal, timedOut, timeoutMs);
+    const paths = await waitForFallbackOperation(
+      tinyGlob(toTinyglobbyPattern(pattern), {
+        cwd: root,
+        onlyFiles: true,
+        dot: includeHidden,
+        ignore: gitInternalGlobExcludes.map((glob) => glob.slice(1)),
+        followSymbolicLinks: false,
+        signal: fallbackSignal
+      }),
+      fallbackSignal,
+      timedOut,
+      timeoutMs
+    );
+    throwIfAbortedOrTimedOut(fallbackSignal, timedOut, timeoutMs);
+
+    return {
+      paths: (await normalizeMatchedPathList(root, paths)).slice(0, limit),
+      backend: "fallback",
+      ...(fallbackReason === undefined ? {} : { fallbackReason }),
+      backendOutputTruncated: false
+    };
+  } catch (error) {
+    if (fallbackSignal.aborted) {
+      throw createFallbackAbortError(timedOut.value, timeoutMs);
+    }
+
+    throw error;
+  } finally {
+    cleanup();
+  }
+}
+
+async function waitForFallbackOperation<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+  timedOut: { readonly value: boolean },
+  timeoutMs: number
+): Promise<T> {
+  if (signal.aborted) {
+    throw createFallbackAbortError(timedOut.value, timeoutMs);
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    const abort = () =>
+      reject(createFallbackAbortError(timedOut.value, timeoutMs));
+
+    signal.addEventListener("abort", abort, { once: true });
+    operation
+      .then(resolve, reject)
+      .finally(() => {
+        signal.removeEventListener("abort", abort);
+      });
   });
+}
+
+function createFallbackAbortSignal(
+  timeoutMs: number,
+  signal: AbortSignal | undefined
+): {
+  readonly signal: AbortSignal;
+  readonly timedOut: { value: boolean };
+  readonly cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const timedOut = { value: false };
+  const timeout = setTimeout(() => {
+    timedOut.value = true;
+    controller.abort();
+  }, timeoutMs);
+  const relayAbort = () => controller.abort();
+
+  if (signal?.aborted === true) {
+    controller.abort();
+  } else {
+    signal?.addEventListener("abort", relayAbort, { once: true });
+  }
 
   return {
-    paths: (await normalizeMatchedPathList(root, paths)).slice(0, limit),
-    backend: "fallback",
-    ...(fallbackReason === undefined ? {} : { fallbackReason }),
-    backendOutputTruncated: false
+    signal: controller.signal,
+    timedOut,
+    cleanup() {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", relayAbort);
+    }
   };
+}
+
+function throwIfAbortedOrTimedOut(
+  signal: AbortSignal,
+  timedOut: { readonly value: boolean },
+  timeoutMs: number
+): void {
+  if (!signal.aborted) {
+    return;
+  }
+
+  throw createFallbackAbortError(timedOut.value, timeoutMs);
+}
+
+function createFallbackAbortError(
+  timedOut: boolean,
+  timeoutMs: number
+): GlobToolExecutionError {
+  return new GlobToolExecutionError(
+    timedOut ? `glob timed out after ${timeoutMs}ms` : "glob was aborted",
+    {
+      backend: "fallback",
+      timedOut,
+      aborted: !timedOut
+    }
+  );
 }
 
 async function isInsideGitRepository(root: string): Promise<boolean> {

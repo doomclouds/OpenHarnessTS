@@ -1405,6 +1405,72 @@ describe("glob project tool", () => {
     }
   });
 
+  it("aborts fallback glob traversal", async () => {
+    const cwd = await makeTempProject("openharness-glob-fallback-abort-");
+    try {
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "**/*" },
+        { cwd, metadata: {}, signal: controller.signal }
+      );
+
+      expect(result).toMatchObject({
+        isError: true,
+        output: "glob was aborted",
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          timedOut: false,
+          aborted: true
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("times out fallback glob traversal even when the fallback does not resolve", async () => {
+    const cwd = await makeTempProject("openharness-glob-fallback-timeout-");
+    const glob = vi.fn(
+      async () => await new Promise<string[]>(() => undefined)
+    );
+    vi.resetModules();
+    vi.doMock("tinyglobby", () => ({ glob }));
+
+    try {
+      const { createGlobTool: createMockedGlobTool } = await import(
+        "../src/tools/project/glob.js"
+      );
+      const result = await createMockedGlobTool({
+        disableRipgrep: true,
+        timeoutMs: 1
+      }).execute({ pattern: "**/*" }, { cwd, metadata: {} });
+
+      expect(result).toMatchObject({
+        isError: true,
+        output: "glob timed out after 1ms",
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          timedOut: true,
+          aborted: false
+        }
+      });
+      expect(glob).toHaveBeenCalledOnce();
+      const calls = glob.mock.calls as unknown as ReadonlyArray<
+        readonly [unknown, { readonly signal?: AbortSignal }]
+      >;
+      const options = calls[0]?.[1];
+      expect(options?.signal?.aborted).toBe(true);
+    } finally {
+      vi.doUnmock("tinyglobby");
+      vi.resetModules();
+      await removeTempProject(cwd);
+    }
+  });
+
   it("fallback does not expose files through internal symlinks when symlinks are supported", async () => {
     const cwd = await makeTempProject("openharness-glob-fallback-link-cwd-");
     const outside = await makeTempProject("openharness-glob-fallback-link-out-");
