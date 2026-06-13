@@ -10,6 +10,10 @@ export {
 export {
   createGrepTool
 } from "./grep.js";
+export {
+  createDefaultProjectToolRegistry,
+  registerDefaultProjectTools
+} from "./registry.js";
 export type {
   RipgrepBackend,
   RipgrepBackendResult,

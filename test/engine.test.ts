@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createAssistantMessage,
+  createDefaultProjectToolRegistry,
   createTextBlock,
   createToolResult,
   createToolUseBlock,
@@ -1653,6 +1654,40 @@ describe("runQuery permission integration", () => {
       });
     }
   );
+
+  it("allows read-only project tools in default permission mode", async () => {
+    const client = new ScriptedApiClient([
+      [
+        assistantToolUse({
+          id: "toolu_read_file",
+          name: "read_file",
+          input: { path: "package.json", offset: 1, limit: 1 }
+        })
+      ],
+      [textComplete("done")]
+    ]);
+    const messages = [createUserMessageFromText("Read package metadata.")];
+
+    const events = await collectEvents(
+      client,
+      messages,
+      createDefaultProjectToolRegistry().listTools(),
+      { mode: "default" }
+    );
+
+    expect(events.some((event) => event.type === "tool_execution_completed")).toBe(
+      true
+    );
+    const toolResult = getToolResultMessage(messages).content[0];
+
+    expect(toolResult).toMatchObject({
+      toolUseId: "toolu_read_file",
+      isError: false
+    });
+    expect((toolResult as { readonly content: string }).content).toContain(
+      '"name": "openharness-ts"'
+    );
+  });
 
   it("computes read-only status from validated input", async () => {
     const execute = vi.fn(() => createToolResult({ output: "validated read" }));

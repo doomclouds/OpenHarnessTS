@@ -18,6 +18,11 @@ import {
   resolveProjectPath,
   ToolRegistry
 } from "../src/tools/index.js";
+import {
+  createDefaultProjectToolRegistry,
+  createDefaultProjectToolRegistry as createDefaultProjectToolRegistryFromRoot,
+  registerDefaultProjectTools
+} from "../src/index.js";
 import type { ReadFileToolInput } from "../src/tools/index.js";
 import type {
   RipgrepBackend,
@@ -3012,5 +3017,35 @@ describe("grep project tool", () => {
 
   it("is read-only", () => {
     expect(createGrepTool().isReadOnly?.({ pattern: "alpha" })).toBe(true);
+  });
+});
+
+describe("default project tool registry", () => {
+  it("registers read_file, glob, and grep", () => {
+    const registry = createDefaultProjectToolRegistry();
+
+    expect(registry.hasTool("read_file")).toBe(true);
+    expect(registry.hasTool("glob")).toBe(true);
+    expect(registry.hasTool("grep")).toBe(true);
+  });
+
+  it("registers tools into an existing registry", () => {
+    const registry = new ToolRegistry();
+
+    registerDefaultProjectTools(registry);
+
+    expect(registry.listTools().map((tool) => tool.name)).toEqual([
+      "read_file",
+      "glob",
+      "grep"
+    ]);
+  });
+
+  it("exports registry helpers from package root", () => {
+    const registry = createDefaultProjectToolRegistryFromRoot();
+
+    expect(registry.hasTool("read_file")).toBe(true);
+    expect(registry.hasTool("glob")).toBe(true);
+    expect(registry.hasTool("grep")).toBe(true);
   });
 });
