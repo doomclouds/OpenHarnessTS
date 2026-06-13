@@ -1,4 +1,4 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { glob as tinyGlob } from "tinyglobby";
 import type { ToolDefinition } from "../definition.js";
@@ -8,7 +8,19 @@ import {
   type RipgrepBackend,
   type RipgrepBackendResult
 } from "./backend.js";
-import { normalizeProjectPath, resolveExistingProjectPath } from "./paths.js";
+import { resolveExistingProjectPath } from "./paths.js";
+import {
+  createFallbackAbortSignal,
+  getGitInternalIgnoreGlobs,
+  gitInternalGlobExcludes,
+  isInsideGitRepository,
+  isRipgrepBackendCannotRun,
+  normalizeMatchedPath,
+  throwIfAbortedOrTimedOut,
+  toTinyglobbyPattern,
+  waitForFallbackOperation
+} from "./search/index.js";
+import type { FallbackAbortSignal } from "./search/index.js";
 
 export type GrepOutputMode = "content" | "files_with_matches" | "count";
 
@@ -16,7 +28,6 @@ const defaultHeadLimit = 200;
 const maxHeadLimit = 2000;
 const defaultTimeoutSeconds = 20;
 const maxTimeoutSeconds = 120;
-const gitInternalGlobExcludes = ["!.git/**", "!**/.git/**"];
 
 export interface GrepToolInput {
   readonly pattern: string;
@@ -565,29 +576,29 @@ async function fallbackGrep(
 
   const regexp = createSearchRegExp(input);
   assertSafeFallbackPattern(input.pattern);
-  const { signal: fallbackSignal, timedOut, cleanup } =
-    createFallbackAbortSignal(input.timeoutSeconds * 1000, signal);
+  const runtime = createFallbackAbortSignal(input.timeoutSeconds * 1000, signal);
+  const createAbortError = (timedOut: boolean) =>
+    createFallbackAbortError(timedOut, input.timeoutSeconds);
 
   try {
-    throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
+    throwIfAbortedOrTimedOut(runtime, createAbortError);
     const paths = await waitForFallbackOperation(
       tinyGlob(toTinyglobbyPattern(input.glob ?? "**/*"), {
         cwd: root,
         onlyFiles: true,
         dot: includeHidden,
-        ignore: gitInternalGlobExcludes.map((glob) => glob.slice(1)),
+        ignore: getGitInternalIgnoreGlobs(),
         followSymbolicLinks: false,
-        signal: fallbackSignal
+        signal: runtime.signal
       }),
-      fallbackSignal,
-      timedOut,
-      input.timeoutSeconds
+      runtime,
+      createAbortError
     );
-    throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
+    throwIfAbortedOrTimedOut(runtime, createAbortError);
 
     const lines: string[] = [];
     for (const matchedPath of paths.sort()) {
-      throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
+      throwIfAbortedOrTimedOut(runtime, createAbortError);
 
       const normalizedPath = await normalizeMatchedPath(root, matchedPath);
       if (normalizedPath === undefined) {
@@ -595,12 +606,11 @@ async function fallbackGrep(
       }
 
       const raw = await waitForFallbackOperation(
-        readFile(path.join(root, normalizedPath), { signal: fallbackSignal }),
-        fallbackSignal,
-        timedOut,
-        input.timeoutSeconds
+        readFile(path.join(root, normalizedPath), { signal: runtime.signal }),
+        runtime,
+        createAbortError
       );
-      throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
+      throwIfAbortedOrTimedOut(runtime, createAbortError);
       if (raw.includes(0)) {
         continue;
       }
@@ -612,8 +622,7 @@ async function fallbackGrep(
         text,
         regexp,
         input,
-        fallbackSignal,
-        timedOut
+        runtime
       );
     }
 
@@ -628,13 +637,13 @@ async function fallbackGrep(
       throw error;
     }
 
-    if (fallbackSignal.aborted) {
-      throw createFallbackAbortError(timedOut.value, input.timeoutSeconds);
+    if (runtime.signal.aborted) {
+      throw createAbortError(runtime.timedOut.value);
     }
 
     throw error;
   } finally {
-    cleanup();
+    runtime.cleanup();
   }
 }
 
@@ -683,8 +692,7 @@ function addFallbackFileMatches(
   text: string,
   regexp: RegExp,
   input: NormalizedGrepToolInput,
-  signal: AbortSignal,
-  timedOut: { readonly value: boolean }
+  runtime: FallbackAbortSignal
 ): void {
   if (input.multiline) {
     addMultilineFallbackMatches(
@@ -693,8 +701,7 @@ function addFallbackFileMatches(
       text,
       regexp,
       input,
-      signal,
-      timedOut
+      runtime
     );
     return;
   }
@@ -704,7 +711,9 @@ function addFallbackFileMatches(
   const matchedLineNumbers = new Set<number>();
 
   for (const [index, line] of textLines.entries()) {
-    throwIfAbortedOrTimedOut(signal, timedOut, input.timeoutSeconds);
+    throwIfAbortedOrTimedOut(runtime, (timedOut) =>
+      createFallbackAbortError(timedOut, input.timeoutSeconds)
+    );
     regexp.lastIndex = 0;
 
     if (!regexp.test(line)) {
@@ -747,8 +756,7 @@ function addMultilineFallbackMatches(
   text: string,
   regexp: RegExp,
   input: NormalizedGrepToolInput,
-  signal: AbortSignal,
-  timedOut: { readonly value: boolean }
+  runtime: FallbackAbortSignal
 ): void {
   const textLines = splitTextLines(text);
   const lineStarts = getLineStartOffsets(textLines);
@@ -756,7 +764,9 @@ function addMultilineFallbackMatches(
   let fileMatches = 0;
 
   for (const match of text.matchAll(regexp)) {
-    throwIfAbortedOrTimedOut(signal, timedOut, input.timeoutSeconds);
+    throwIfAbortedOrTimedOut(runtime, (timedOut) =>
+      createFallbackAbortError(timedOut, input.timeoutSeconds)
+    );
     fileMatches += 1;
     matchedLineNumbers.add(findLineIndex(lineStarts, match.index ?? 0));
 
@@ -971,122 +981,6 @@ function isAsciiDigit(character: string): boolean {
   return character >= "0" && character <= "9";
 }
 
-async function normalizeMatchedPath(
-  root: string,
-  projectPath: string
-): Promise<string | undefined> {
-  const normalized = normalizeProjectPath(projectPath);
-  const relativePath = normalized.startsWith("./")
-    ? normalized.slice(2)
-    : normalized;
-
-  if (isGitInternalPath(relativePath)) {
-    return undefined;
-  }
-
-  if (!isSafeRelativeMatch(root, relativePath)) {
-    return undefined;
-  }
-
-  const realMatchedPath = await realpathMatchedPath(
-    path.resolve(root, relativePath)
-  );
-  if (realMatchedPath === undefined) {
-    return undefined;
-  }
-
-  if (!isInsideRoot(root, realMatchedPath)) {
-    return undefined;
-  }
-
-  return relativePath;
-}
-
-async function realpathMatchedPath(
-  matchedPath: string
-): Promise<string | undefined> {
-  try {
-    return await realpath(matchedPath);
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return undefined;
-    }
-
-    throw error;
-  }
-}
-
-async function waitForFallbackOperation<T>(
-  operation: Promise<T>,
-  signal: AbortSignal,
-  timedOut: { readonly value: boolean },
-  timeoutSeconds: number
-): Promise<T> {
-  if (signal.aborted) {
-    throw createFallbackAbortError(timedOut.value, timeoutSeconds);
-  }
-
-  return await new Promise<T>((resolve, reject) => {
-    const abort = () =>
-      reject(createFallbackAbortError(timedOut.value, timeoutSeconds));
-
-    signal.addEventListener("abort", abort, { once: true });
-    operation
-      .then(resolve, reject)
-      .finally(() => {
-        signal.removeEventListener("abort", abort);
-      });
-  });
-}
-
-function createFallbackAbortSignal(
-  timeoutMs: number,
-  signal: AbortSignal | undefined
-): {
-  readonly signal: AbortSignal;
-  readonly timedOut: { value: boolean };
-  readonly cleanup: () => void;
-} {
-  const controller = new AbortController();
-  const timedOut = { value: false };
-  const timeout = setTimeout(() => {
-    timedOut.value = true;
-    controller.abort();
-  }, timeoutMs);
-  const relayAbort = () => controller.abort();
-
-  if (signal?.aborted === true) {
-    controller.abort();
-  } else {
-    signal?.addEventListener("abort", relayAbort, { once: true });
-  }
-
-  return {
-    signal: controller.signal,
-    timedOut,
-    cleanup() {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", relayAbort);
-    }
-  };
-}
-
-function throwIfAbortedOrTimedOut(
-  signal: AbortSignal,
-  timedOut: { readonly value: boolean },
-  timeoutSeconds: number
-): void {
-  if (!signal.aborted) {
-    return;
-  }
-
-  throw createFallbackAbortError(timedOut.value, timeoutSeconds);
-}
-
 function createFallbackAbortError(
   timedOut: boolean,
   timeoutSeconds: number
@@ -1101,41 +995,6 @@ function createFallbackAbortError(
       aborted: !timedOut
     }
   );
-}
-
-async function isInsideGitRepository(root: string): Promise<boolean> {
-  let current = await realpath(root);
-
-  while (true) {
-    if (await hasGitMarker(current)) {
-      return true;
-    }
-
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return false;
-    }
-
-    current = parent;
-  }
-}
-
-async function hasGitMarker(directory: string): Promise<boolean> {
-  try {
-    const gitMarker = await stat(path.join(directory, ".git"));
-
-    return gitMarker.isDirectory() || gitMarker.isFile();
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error.code === "ENOENT" || error.code === "ENOTDIR")
-    ) {
-      return false;
-    }
-
-    throw error;
-  }
 }
 
 function computeGrepStats(
@@ -1240,14 +1099,6 @@ function findLineIndex(lineStarts: readonly number[], offset: number): number {
   return selected;
 }
 
-function toTinyglobbyPattern(pattern: string): string {
-  return hasPathSeparator(pattern) ? pattern : `**/${pattern}`;
-}
-
-function hasPathSeparator(pattern: string): boolean {
-  return /[\\/]/u.test(pattern);
-}
-
 function hasUnescaped(value: string, character: string): boolean {
   let escaped = false;
 
@@ -1268,62 +1119,6 @@ function hasUnescaped(value: string, character: string): boolean {
   }
 
   return false;
-}
-
-function isGitInternalPath(projectPath: string): boolean {
-  return splitPathSegments(projectPath).some((segment) => segment === ".git");
-}
-
-function isSafeRelativeMatch(root: string, projectPath: string): boolean {
-  if (
-    path.isAbsolute(projectPath) ||
-    path.posix.isAbsolute(projectPath) ||
-    path.win32.isAbsolute(projectPath)
-  ) {
-    return false;
-  }
-
-  if (splitPathSegments(projectPath).some((segment) => segment.includes(".."))) {
-    return false;
-  }
-
-  const resolvedPath = path.resolve(root, projectPath);
-
-  return isInsideRoot(root, resolvedPath);
-}
-
-function isInsideRoot(root: string, projectPath: string): boolean {
-  const relativeToRoot = path.relative(root, projectPath);
-
-  return (
-    relativeToRoot.length === 0 ||
-    (!relativeToRoot.startsWith(`..${path.sep}`) &&
-      relativeToRoot !== ".." &&
-      !path.isAbsolute(relativeToRoot))
-  );
-}
-
-function splitPathSegments(projectPath: string): string[] {
-  return projectPath.split(/[\\/]+/u).filter((segment) => segment.length > 0);
-}
-
-function isRipgrepBackendCannotRun(result: RipgrepBackendResult): boolean {
-  const stderr = result.stderr.trim();
-
-  return (
-    result.exitCode === null &&
-    result.signal === null &&
-    !result.timedOut &&
-    !result.aborted &&
-    result.stdout.length === 0 &&
-    !result.stdoutTruncated &&
-    !result.stderrTruncated &&
-    isSpawnLikeRipgrepFailure(stderr)
-  );
-}
-
-function isSpawnLikeRipgrepFailure(stderr: string): boolean {
-  return /^spawn\b/u.test(stderr);
 }
 
 function createRipgrepError(

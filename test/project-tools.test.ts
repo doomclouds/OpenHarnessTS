@@ -2531,6 +2531,36 @@ describe("grep project tool", () => {
     }
   });
 
+  it("fallback allows dot-dot inside file and directory names", async () => {
+    const cwd = await makeTempProject("openharness-grep-fallback-dotdot-");
+    try {
+      mkdirSync(join(cwd, "v1..v2"));
+      writeFileSync(join(cwd, "foo..bar"), "needle\n", "utf8");
+      writeFileSync(join(cwd, "v1..v2", "report.txt"), "needle\n", "utf8");
+
+      const result = await createGrepTool({ disableRipgrep: true }).execute(
+        { pattern: "needle", glob: "**/*" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        isError: false,
+        metadata: {
+          tool: "grep",
+          backend: "fallback",
+          numFiles: 2,
+          numMatches: 2
+        }
+      });
+      expect(result.output.split("\n").sort()).toEqual([
+        "foo..bar:1:needle",
+        "v1..v2/report.txt:1:needle"
+      ]);
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("falls back when the ripgrep backend cannot run", async () => {
     const cwd = await makeTempProject("openharness-grep-rg-spawn-fallback-");
     try {
