@@ -86,7 +86,7 @@ export function isSafeRelativeMatch(root: string, projectPath: string): boolean 
     return false;
   }
 
-  if (splitPathSegments(projectPath).some((segment) => segment.includes(".."))) {
+  if (splitPathSegments(projectPath).some((segment) => segment === "..")) {
     return false;
   }
 

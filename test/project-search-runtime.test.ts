@@ -273,6 +273,23 @@ describe("project search match helpers", () => {
     }
   });
 
+  it("allows matched file names containing dot-dot without traversal", async () => {
+    const cwd = await makeTempProject("openharness-search-dotdot-name-");
+
+    try {
+      writeFileSync(join(cwd, "foo..bar"), "ok\n", "utf8");
+      mkdirSync(join(cwd, "v1..v2"));
+      writeFileSync(join(cwd, "v1..v2", "report.txt"), "ok\n", "utf8");
+
+      await expect(normalizeMatchedPath(cwd, "foo..bar")).resolves.toBe("foo..bar");
+      await expect(
+        normalizeMatchedPath(cwd, "v1..v2/report.txt")
+      ).resolves.toBe("v1..v2/report.txt");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("adapts bare fallback glob patterns to recursive tinyglobby patterns", () => {
     expect(toTinyglobbyPattern("*.ts")).toBe("**/*.ts");
     expect(toTinyglobbyPattern("src/*.ts")).toBe("src/*.ts");
