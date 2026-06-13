@@ -1954,6 +1954,7 @@ describe("glob project tool", () => {
         { pattern: "../*.txt" },
         { path: "../*.txt" },
         { pattern: "**/../*" },
+        { pattern: "\\absolute\\*.txt" },
         { pattern: "/absolute/*.txt" }
       ]) {
         const result = await executeGlobTool(cwd, input);

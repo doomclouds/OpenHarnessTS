@@ -408,6 +408,7 @@ function createFallbackAbortError(
 function isSafeRelativeGlobPattern(pattern: string): boolean {
   if (
     pattern.startsWith("/") ||
+    pattern.startsWith("\\") ||
     /^[a-zA-Z]:[\\/]/u.test(pattern) ||
     /^\\\\/u.test(pattern)
   ) {
