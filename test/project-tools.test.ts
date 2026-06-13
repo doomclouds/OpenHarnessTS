@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -2104,6 +2104,56 @@ describe("grep project tool", () => {
     }
   });
 
+  it("parses ripgrep output for file names with separators", async () => {
+    const cwd = await makeTempProject("openharness-grep-separator-paths-");
+    try {
+      mkdirSync(join(cwd, "dir-name"));
+      writeFileSync(join(cwd, "my-file.txt"), "needle\n", "utf8");
+      writeFileSync(join(cwd, "dir-name", "a.txt"), "one\nneedle\n", "utf8");
+      const colonFile = join(cwd, "has:colon.txt");
+      try {
+        writeFileSync(colonFile, "needle\n", "utf8");
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "EINVAL"
+        ) {
+          // Windows file names cannot contain ':'.
+        } else {
+          throw error;
+        }
+      }
+
+      const content = await executeGrepTool(cwd, {
+        pattern: "needle",
+        glob: "**/*.txt"
+      });
+      const context = await executeGrepTool(cwd, {
+        pattern: "needle",
+        glob: "dir-name/*.txt",
+        context: 1
+      });
+
+      expect(content.isError).toBe(false);
+      expect(content.output).toContain("my-file.txt:1:needle");
+      expect(content.output).toContain("dir-name/a.txt:2:needle");
+      if (process.platform !== "win32" && existsSync(colonFile)) {
+        expect(content.output).toContain("has:colon.txt:1:needle");
+      }
+      expect(content.metadata).toMatchObject({
+        numFiles:
+          process.platform !== "win32" && existsSync(colonFile) ? 3 : 2,
+        numMatches:
+          process.platform !== "win32" && existsSync(colonFile) ? 3 : 2
+      });
+      expect(context.output).toContain("dir-name/a.txt-1-one");
+      expect(context.output).toContain("dir-name/a.txt:2:needle");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("supports glob and fileGlob aliases", async () => {
     const cwd = await makeTempProject("openharness-grep-glob-alias-");
     try {
@@ -2264,11 +2314,11 @@ describe("grep project tool", () => {
           "never",
           "--hidden",
           "--glob",
+          "*.ts",
+          "--glob",
           "!.git/**",
           "--glob",
           "!**/.git/**",
-          "--glob",
-          "*.ts",
           "--type",
           "ts",
           "-i",
@@ -2285,6 +2335,57 @@ describe("grep project tool", () => {
           cwd: join(cwd, "src"),
           timeoutMs: 7000,
           signal: controller.signal
+        }
+      );
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("keeps git internals excluded even when the requested glob targets them", async () => {
+    const cwd = await makeTempProject("openharness-grep-user-git-glob-");
+    try {
+      mkdirSync(join(cwd, ".git"));
+      writeFileSync(join(cwd, ".git", "config"), "needle\n", "utf8");
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({ stdout: ".git/config:1:needle\n" })
+      );
+
+      const result = await createGrepTool({ backend }).execute(
+        { pattern: "needle", glob: ".git/**" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "(no matches)",
+        isError: false,
+        metadata: {
+          tool: "grep",
+          backend: "ripgrep",
+          numFiles: 0,
+          numMatches: 0
+        }
+      });
+      expect(backend.run).toHaveBeenCalledWith(
+        [
+          "--no-heading",
+          "--line-number",
+          "--color",
+          "never",
+          "--hidden",
+          "--glob",
+          ".git/**",
+          "--glob",
+          "!.git/**",
+          "--glob",
+          "!**/.git/**",
+          "--",
+          "needle",
+          "."
+        ],
+        {
+          cwd,
+          timeoutMs: 20_000
         }
       );
     } finally {
@@ -2390,6 +2491,51 @@ describe("grep project tool", () => {
         metadata: {
           tool: "grep",
           backend: "fallback",
+          fallbackReason: "spawn ENOENT"
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("does not fall back when type filters cannot be preserved", async () => {
+    const cwd = await makeTempProject("openharness-grep-fallback-type-");
+    try {
+      writeFileSync(join(cwd, "a.ts"), "needle\n", "utf8");
+
+      const disabled = await createGrepTool({ disableRipgrep: true }).execute(
+        { pattern: "needle", type: "ts" },
+        { cwd, metadata: {} }
+      );
+      const backend = createFakeRipgrepBackend(
+        createFakeRipgrepResult({
+          exitCode: null,
+          signal: null,
+          stderr: "spawn ENOENT"
+        })
+      );
+      const spawnFallback = await createGrepTool({ backend }).execute(
+        { pattern: "needle", type: "ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(disabled).toMatchObject({
+        output: "grep fallback does not support type filters",
+        isError: true,
+        metadata: {
+          tool: "grep",
+          backend: "fallback",
+          timedOut: false
+        }
+      });
+      expect(spawnFallback).toMatchObject({
+        output: "grep fallback does not support type filters",
+        isError: true,
+        metadata: {
+          tool: "grep",
+          backend: "fallback",
+          timedOut: false,
           fallbackReason: "spawn ENOENT"
         }
       });
@@ -2580,6 +2726,47 @@ describe("grep project tool", () => {
         }
       });
       expect(result.output).not.toContain(".hidden/file.txt");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("keeps fallback count statistics independent from pagination", async () => {
+    const cwd = await makeTempProject("openharness-grep-fallback-count-");
+    try {
+      writeFileSync(
+        join(cwd, "a.txt"),
+        "needle one\nneedle two\nneedle three\n",
+        "utf8"
+      );
+      writeFileSync(join(cwd, "b.txt"), "needle four\n", "utf8");
+      writeFileSync(join(cwd, "c.txt"), "needle five\n", "utf8");
+
+      const result = await createGrepTool({ disableRipgrep: true }).execute(
+        {
+          pattern: "needle",
+          outputMode: "count",
+          offset: 1,
+          headLimit: 1
+        },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "b.txt:1",
+        isError: false,
+        metadata: {
+          tool: "grep",
+          backend: "fallback",
+          outputMode: "count",
+          numFiles: 3,
+          numMatches: 5,
+          numLines: 1,
+          appliedLimit: 1,
+          appliedOffset: 1,
+          truncated: true
+        }
+      });
     } finally {
       await removeTempProject(cwd);
     }

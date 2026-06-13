@@ -243,7 +243,8 @@ export function createGrepTool(
             durationMs: Date.now() - startedAt,
             truncated:
               grepInput.offset + visibleLines.length <
-              searchResult.lines.length,
+                searchResult.lines.length ||
+              searchResult.stdoutTruncated === true,
             ...(searchResult.fallbackReason === undefined
               ? {}
               : { fallbackReason: searchResult.fallbackReason }),
@@ -454,13 +455,13 @@ async function ripgrepGrep(
     "--line-number",
     "--color",
     "never",
-    ...(includeHidden ? ["--hidden"] : []),
-    ...gitInternalGlobExcludes.flatMap((glob) => ["--glob", glob])
+    ...(includeHidden ? ["--hidden"] : [])
   ];
 
   if (input.glob !== undefined) {
     args.push("--glob", input.glob);
   }
+  args.push(...gitInternalGlobExcludes.flatMap((glob) => ["--glob", glob]));
   if (input.type !== undefined) {
     args.push("--type", input.type);
   }
@@ -551,7 +552,19 @@ async function fallbackGrep(
   signal: AbortSignal | undefined,
   fallbackReason?: string
 ): Promise<GrepSearchResult> {
+  if (input.type !== undefined) {
+    throw new GrepToolExecutionError(
+      "grep fallback does not support type filters",
+      {
+        backend: "fallback",
+        timedOut: false,
+        ...(fallbackReason === undefined ? {} : { fallbackReason })
+      }
+    );
+  }
+
   const regexp = createSearchRegExp(input);
+  assertSafeFallbackPattern(input.pattern);
   const { signal: fallbackSignal, timedOut, cleanup } =
     createFallbackAbortSignal(input.timeoutSeconds * 1000, signal);
 
@@ -573,20 +586,21 @@ async function fallbackGrep(
     throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
 
     const lines: string[] = [];
-    const maxCollectedLines = input.offset + input.headLimit + 1;
     for (const matchedPath of paths.sort()) {
       throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
-
-      if (lines.length >= maxCollectedLines) {
-        break;
-      }
 
       const normalizedPath = await normalizeMatchedPath(root, matchedPath);
       if (normalizedPath === undefined) {
         continue;
       }
 
-      const raw = await readFile(path.join(root, normalizedPath));
+      const raw = await waitForFallbackOperation(
+        readFile(path.join(root, normalizedPath), { signal: fallbackSignal }),
+        fallbackSignal,
+        timedOut,
+        input.timeoutSeconds
+      );
+      throwIfAbortedOrTimedOut(fallbackSignal, timedOut, input.timeoutSeconds);
       if (raw.includes(0)) {
         continue;
       }
@@ -598,12 +612,13 @@ async function fallbackGrep(
         text,
         regexp,
         input,
-        maxCollectedLines
+        fallbackSignal,
+        timedOut
       );
     }
 
     return {
-      lines: lines.slice(0, maxCollectedLines),
+      lines,
       backend: "fallback",
       ...(fallbackReason === undefined ? {} : { fallbackReason }),
       timedOut: false
@@ -639,13 +654,30 @@ function createSearchRegExp(input: NormalizedGrepToolInput): RegExp {
   }
 }
 
+function assertSafeFallbackPattern(pattern: string): void {
+  if (hasPotentiallyCatastrophicFallbackPattern(pattern)) {
+    throw new GrepToolExecutionError(
+      `unsupported fallback regex pattern '${pattern}'`,
+      {
+        backend: "fallback",
+        timedOut: false
+      }
+    );
+  }
+}
+
+function hasPotentiallyCatastrophicFallbackPattern(pattern: string): boolean {
+  return /\((?:[^()\\]|\\.)*[+*](?:[^()\\]|\\.)*\)[+*?{]/u.test(pattern);
+}
+
 function addFallbackFileMatches(
   lines: string[],
   filePath: string,
   text: string,
   regexp: RegExp,
   input: NormalizedGrepToolInput,
-  maxCollectedLines: number
+  signal: AbortSignal,
+  timedOut: { readonly value: boolean }
 ): void {
   if (input.multiline) {
     addMultilineFallbackMatches(
@@ -654,7 +686,8 @@ function addFallbackFileMatches(
       text,
       regexp,
       input,
-      maxCollectedLines
+      signal,
+      timedOut
     );
     return;
   }
@@ -664,6 +697,7 @@ function addFallbackFileMatches(
   const matchedLineNumbers = new Set<number>();
 
   for (const [index, line] of textLines.entries()) {
+    throwIfAbortedOrTimedOut(signal, timedOut, input.timeoutSeconds);
     regexp.lastIndex = 0;
 
     if (!regexp.test(line)) {
@@ -676,10 +710,6 @@ function addFallbackFileMatches(
     if (input.outputMode === "files_with_matches") {
       lines.push(filePath);
       return;
-    }
-
-    if (fileMatches >= maxCollectedLines) {
-      break;
     }
   }
 
@@ -695,10 +725,6 @@ function addFallbackFileMatches(
     textLines.length,
     input
   )) {
-    if (lines.length >= maxCollectedLines) {
-      break;
-    }
-
     const isMatch = matchedLineNumbers.has(lineIndex);
     lines.push(
       `${filePath}${isMatch ? ":" : "-"}${lineIndex + 1}${
@@ -714,7 +740,8 @@ function addMultilineFallbackMatches(
   text: string,
   regexp: RegExp,
   input: NormalizedGrepToolInput,
-  maxCollectedLines: number
+  signal: AbortSignal,
+  timedOut: { readonly value: boolean }
 ): void {
   const textLines = splitTextLines(text);
   const lineStarts = getLineStartOffsets(textLines);
@@ -722,16 +749,13 @@ function addMultilineFallbackMatches(
   let fileMatches = 0;
 
   for (const match of text.matchAll(regexp)) {
+    throwIfAbortedOrTimedOut(signal, timedOut, input.timeoutSeconds);
     fileMatches += 1;
     matchedLineNumbers.add(findLineIndex(lineStarts, match.index ?? 0));
 
     if (input.outputMode === "files_with_matches") {
       lines.push(filePath);
       return;
-    }
-
-    if (fileMatches >= maxCollectedLines) {
-      break;
     }
   }
 
@@ -747,10 +771,6 @@ function addMultilineFallbackMatches(
     textLines.length,
     input
   )) {
-    if (lines.length >= maxCollectedLines) {
-      break;
-    }
-
     const isMatch = matchedLineNumbers.has(lineIndex);
     lines.push(
       `${filePath}${isMatch ? ":" : "-"}${lineIndex + 1}${
@@ -818,40 +838,130 @@ async function normalizeRipgrepLine(
     return normalizedPath;
   }
 
-  const separator = outputMode === "count" ? ":" : findRipgrepLineSeparator(line);
-  const firstSeparatorIndex = line.indexOf(separator);
-  if (firstSeparatorIndex < 0) {
-    return undefined;
-  }
-
-  const secondSeparatorIndex = line.indexOf(separator, firstSeparatorIndex + 1);
-  const pathEnd =
+  const parsed =
     outputMode === "count"
-      ? firstSeparatorIndex
-      : secondSeparatorIndex < 0
-        ? firstSeparatorIndex
-        : firstSeparatorIndex;
-  const normalizedPath = await normalizeMatchedPath(root, line.slice(0, pathEnd));
-  if (normalizedPath === undefined) {
+      ? await parseRipgrepCountLine(root, line)
+      : await parseRipgrepTextLine(root, line);
+
+  if (parsed === undefined) {
     return undefined;
   }
 
-  return `${normalizedPath}${line.slice(pathEnd)}`;
+  return `${parsed.path}${line.slice(parsed.pathEnd)}`;
 }
 
-function findRipgrepLineSeparator(line: string): ":" | "-" {
-  const colonIndex = line.indexOf(":");
-  const dashIndex = line.indexOf("-");
+interface ParsedRipgrepLine {
+  readonly path: string;
+  readonly pathEnd: number;
+  readonly separator: ":" | "-";
+}
 
-  if (colonIndex < 0) {
-    return "-";
+async function parseRipgrepTextLine(
+  root: string,
+  line: string
+): Promise<ParsedRipgrepLine | undefined> {
+  let parsed: ParsedRipgrepLine | undefined;
+
+  for (const candidate of findTextLineCandidates(line)) {
+    const normalizedPath = await normalizeMatchedPath(
+      root,
+      line.slice(0, candidate.pathEnd)
+    );
+
+    if (normalizedPath !== undefined) {
+      parsed = {
+        path: normalizedPath,
+        pathEnd: candidate.pathEnd,
+        separator: candidate.separator
+      };
+    }
   }
 
-  if (dashIndex < 0) {
-    return ":";
+  return parsed;
+}
+
+async function parseRipgrepCountLine(
+  root: string,
+  line: string
+): Promise<ParsedRipgrepLine | undefined> {
+  let parsed: ParsedRipgrepLine | undefined;
+
+  for (const pathEnd of findCountLineCandidates(line)) {
+    const normalizedPath = await normalizeMatchedPath(
+      root,
+      line.slice(0, pathEnd)
+    );
+
+    if (normalizedPath !== undefined) {
+      parsed = {
+        path: normalizedPath,
+        pathEnd,
+        separator: ":"
+      };
+    }
   }
 
-  return colonIndex < dashIndex ? ":" : "-";
+  return parsed;
+}
+
+function findTextLineCandidates(
+  line: string
+): Array<{ readonly pathEnd: number; readonly separator: ":" | "-" }> {
+  const candidates: Array<{
+    readonly pathEnd: number;
+    readonly separator: ":" | "-";
+  }> = [];
+
+  for (let index = 0; index < line.length; index += 1) {
+    const separator = line[index];
+    if (separator !== ":" && separator !== "-") {
+      continue;
+    }
+
+    const digitsStart = index + 1;
+    const digitsEnd = readDigitsEnd(line, digitsStart);
+    if (digitsEnd === digitsStart || line[digitsEnd] !== separator) {
+      continue;
+    }
+
+    candidates.push({ pathEnd: index, separator });
+  }
+
+  return candidates;
+}
+
+function findCountLineCandidates(line: string): number[] {
+  const candidates: number[] = [];
+
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] !== ":") {
+      continue;
+    }
+
+    const digitsStart = index + 1;
+    const digitsEnd = readDigitsEnd(line, digitsStart);
+    if (digitsEnd === digitsStart || digitsEnd !== line.length) {
+      continue;
+    }
+
+    candidates.push(index);
+  }
+
+  return candidates;
+}
+
+function readDigitsEnd(line: string, start: number): number {
+  let index = start;
+
+  while (index < line.length && isAsciiDigit(line[index] ?? "")) {
+    index += 1;
+  }
+
+  return index;
+}
+
+function isAsciiDigit(character: string): boolean {
+  return character >= "0" && character <= "9";
 }
 
 async function normalizeMatchedPath(
@@ -1027,7 +1137,7 @@ function computeGrepStats(
 ): { readonly numFiles: number; readonly numMatches: number } {
   if (outputMode === "count") {
     const countEntries = lines.map((line) => {
-      const countSeparator = line.lastIndexOf(":");
+      const countSeparator = findNormalizedCountPathEnd(line);
       const count = Number.parseInt(line.slice(countSeparator + 1), 10);
 
       return {
@@ -1046,8 +1156,9 @@ function computeGrepStats(
   let contentMatches = 0;
 
   for (const line of lines) {
-    const separator = findRipgrepLineSeparator(line);
-    const pathEnd = line.indexOf(separator);
+    const parsed = findNormalizedTextLineCandidate(line);
+    const separator = parsed?.separator ?? ":";
+    const pathEnd = parsed?.pathEnd ?? -1;
     const file = pathEnd < 0 ? line : line.slice(0, pathEnd);
 
     if (file.length > 0) {
@@ -1064,6 +1175,18 @@ function computeGrepStats(
     numMatches:
       outputMode === "files_with_matches" ? files.size : contentMatches
   };
+}
+
+function findNormalizedCountPathEnd(line: string): number {
+  const candidates = findCountLineCandidates(line);
+
+  return candidates.at(-1) ?? line.lastIndexOf(":");
+}
+
+function findNormalizedTextLineCandidate(
+  line: string
+): { readonly pathEnd: number; readonly separator: ":" | "-" } | undefined {
+  return findTextLineCandidates(line).at(-1);
 }
 
 function splitTextLines(text: string): string[] {
