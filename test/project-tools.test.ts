@@ -1294,6 +1294,31 @@ describe("glob project tool", () => {
     }
   });
 
+  it("allows matched file names containing dot-dot without traversal", async () => {
+    const cwd = await makeTempProject("openharness-glob-dotdot-name-");
+    try {
+      writeFileSync(join(cwd, "foo..bar"), "ok\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "foo..bar" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: "foo..bar",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          matchedFileCount: 1,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("fallback matches bare patterns against basenames without hidden files outside git repositories", async () => {
     const cwd = await makeTempProject("openharness-glob-bare-fallback-");
     try {
@@ -1929,7 +1954,7 @@ describe("glob project tool", () => {
         { pattern: "../*.txt" },
         { path: "../*.txt" },
         { pattern: "**/../*" },
-        { pattern: "foo..bar" },
+        { pattern: "\\absolute\\*.txt" },
         { pattern: "/absolute/*.txt" }
       ]) {
         const result = await executeGlobTool(cwd, input);
@@ -2501,6 +2526,36 @@ describe("grep project tool", () => {
       });
       expect(result.output).not.toContain(".hidden/dot.ts");
       expect(result.output).not.toContain("binary.ts");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
+  it("fallback allows dot-dot inside file and directory names", async () => {
+    const cwd = await makeTempProject("openharness-grep-fallback-dotdot-");
+    try {
+      mkdirSync(join(cwd, "v1..v2"));
+      writeFileSync(join(cwd, "foo..bar"), "needle\n", "utf8");
+      writeFileSync(join(cwd, "v1..v2", "report.txt"), "needle\n", "utf8");
+
+      const result = await createGrepTool({ disableRipgrep: true }).execute(
+        { pattern: "needle", glob: "**/*" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        isError: false,
+        metadata: {
+          tool: "grep",
+          backend: "fallback",
+          numFiles: 2,
+          numMatches: 2
+        }
+      });
+      expect(result.output.split("\n").sort()).toEqual([
+        "foo..bar:1:needle",
+        "v1..v2/report.txt:1:needle"
+      ]);
     } finally {
       await removeTempProject(cwd);
     }
