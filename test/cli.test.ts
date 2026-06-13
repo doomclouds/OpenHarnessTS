@@ -158,6 +158,44 @@ describe("CLI parser", () => {
     }
   });
 
+  it("rejects unknown options after print prompt", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--model", "deepseek-chat"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--model",
+        message: "Unknown option: --model"
+      }
+    });
+  });
+
+  it("rejects positional arguments after print prompt", () => {
+    expect(parseCliArgs(["--print", "hello", "extra"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "extra",
+        message: "Unknown option: extra"
+      }
+    });
+  });
+
+  it("rejects option-like tokens as missing cwd values", () => {
+    expect(parseCliArgs(["--cwd", "--print", "hello"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_cwd",
+        option: "--cwd",
+        value: "",
+        message: "--cwd requires an existing directory path."
+      }
+    });
+  });
+
   it("rejects unknown options", () => {
     expect(parseCliArgs(["--model", "deepseek-chat"], { version: "1.2.3" })).toEqual({
       type: "error",
