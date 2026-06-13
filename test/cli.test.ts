@@ -226,6 +226,9 @@ describe("CLI runner", () => {
     expect(runCli(["--help"], captured.io, { version: "1.2.3" })).toBe(0);
     expect(captured.stdout.join("")).toContain("OpenHarness");
     expect(captured.stdout.join("")).toContain("openharness --print <prompt>");
+    expect(captured.stdout.join("")).toContain(
+      "print execution is not implemented yet"
+    );
     expect(captured.stderr).toEqual([]);
   });
 

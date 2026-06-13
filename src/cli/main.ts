@@ -44,6 +44,8 @@ export function renderHelp(): string {
     "  --cwd <dir>    Run from an existing working directory.",
     "  --help         Show help.",
     "  --version      Show version.",
+    "",
+    "This alpha CLI only has a skeleton entry; print execution is not implemented yet.",
     ""
   ].join("\n");
 }
