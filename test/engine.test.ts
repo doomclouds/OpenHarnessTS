@@ -27,6 +27,8 @@ import type {
   StreamEvent
 } from "../src/index.js";
 
+const defaultTestCwd = process.cwd();
+
 class ScriptedApiClient implements ApiClient {
   public readonly requests: ApiMessageRequest[] = [];
   private readonly turns: readonly (readonly ApiStreamEvent[])[];
@@ -95,6 +97,7 @@ async function collectEvents(
     readonly permissionChecker?: PermissionChecker;
     readonly toolMetadata?: Readonly<Record<string, unknown>>;
     readonly hookExecutor?: HookExecutor;
+    readonly cwd?: string;
   } = {}
 ): Promise<readonly StreamEvent[]> {
   const registry = new ToolRegistry();
@@ -111,7 +114,7 @@ async function collectEvents(
       permissionChecker:
         options.permissionChecker ??
         new PermissionChecker({ mode: options.mode ?? "full_auto" }),
-      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      cwd: options.cwd ?? defaultTestCwd,
       model: "mock-model",
       systemPrompt: "You are a test assistant.",
       maxTokens: 128,
@@ -914,7 +917,7 @@ describe("runQuery hook lifecycle", () => {
     expect(execute).toHaveBeenCalledWith(
       expectedInput,
       expect.objectContaining({
-        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+        cwd: defaultTestCwd
       })
     );
     expect(getToolResultMessage(messages).content[0]).toMatchObject({
@@ -963,7 +966,7 @@ describe("runQuery hook lifecycle", () => {
     expect(execute).toHaveBeenCalledWith(
       circularInput,
       expect.objectContaining({
-        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+        cwd: defaultTestCwd
       })
     );
     expect(events.map((event) => event.type)).toEqual([
@@ -1264,7 +1267,7 @@ describe("runQuery tool-call loop", () => {
     expect(execute).toHaveBeenCalledWith(
       { text: "hello" },
       {
-        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+        cwd: defaultTestCwd,
         metadata: {
           requestId: "req-123"
         }
@@ -1672,7 +1675,7 @@ describe("runQuery permission integration", () => {
       client,
       messages,
       createDefaultProjectToolRegistry().listTools(),
-      { mode: "default" }
+      { mode: "default", cwd: process.cwd() }
     );
 
     expect(events.some((event) => event.type === "tool_execution_completed")).toBe(
@@ -1728,7 +1731,7 @@ describe("runQuery permission integration", () => {
     expect(execute).toHaveBeenCalledWith(
       { readOnly: true },
       expect.objectContaining({
-        cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS"
+        cwd: defaultTestCwd
       })
     );
   });
