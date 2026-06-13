@@ -18,3 +18,4 @@ export type {
   ToolInputValidator
 } from "./definition.js";
 export { ToolRegistry } from "./registry.js";
+export * from "./project/index.js";

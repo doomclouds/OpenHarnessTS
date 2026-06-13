@@ -31,6 +31,7 @@ export type {
   ToolInputValidator,
   ToolResult
 } from "./tools/index.js";
+export * from "./tools/project/index.js";
 export {
   createAssistantMessage,
   createTextBlock,
