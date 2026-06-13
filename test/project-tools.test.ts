@@ -1046,6 +1046,75 @@ describe("glob project tool", () => {
     }
   });
 
+  it("includes hidden matches when ripgrep starts from a git repo subdirectory", async () => {
+    const repoRoot = await makeTempProject("openharness-glob-subdir-git-rg-");
+    try {
+      const cwd = join(repoRoot, "packages", "app");
+      mkdirSync(join(repoRoot, ".git"));
+      mkdirSync(join(cwd, ".hidden"), { recursive: true });
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "visible.ts"), "visible\n", "utf8");
+
+      const result = await createGlobTool().execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".hidden/dot.ts\nvisible.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 2,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(repoRoot);
+    }
+  });
+
+  it("ripgrep broad matches skip git internals while keeping other hidden paths", async () => {
+    const cwd = await makeTempProject("openharness-glob-git-internals-rg-");
+    try {
+      mkdirSync(join(cwd, ".git"));
+      mkdirSync(join(cwd, ".github", "workflows"), { recursive: true });
+      mkdirSync(join(cwd, ".hidden"));
+      writeFileSync(join(cwd, ".git", "config"), "git\n", "utf8");
+      writeFileSync(
+        join(cwd, ".github", "workflows", "ci.yml"),
+        "ci\n",
+        "utf8"
+      );
+      writeFileSync(join(cwd, ".hidden", "file.ts"), "hidden\n", "utf8");
+      writeFileSync(join(cwd, "visible.txt"), "visible\n", "utf8");
+
+      const result = await createGlobTool().execute(
+        { pattern: "**/*" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".github/workflows/ci.yml\n.hidden/file.ts\nvisible.txt",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "ripgrep",
+          root: cwd,
+          pattern: "**/*",
+          matchedFileCount: 3,
+          truncated: false
+        }
+      });
+      expect(result.output).not.toContain(".git/config");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("accepts path as pattern alias and rejects ambiguous pattern and path through the registry", async () => {
     const cwd = await makeTempProject("openharness-glob-alias-");
     try {
@@ -1265,6 +1334,77 @@ describe("glob project tool", () => {
     }
   });
 
+  it("fallback includes hidden matches from a git repo subdirectory", async () => {
+    const repoRoot = await makeTempProject(
+      "openharness-glob-subdir-git-fallback-"
+    );
+    try {
+      const cwd = join(repoRoot, "packages", "app");
+      mkdirSync(join(repoRoot, ".git"));
+      mkdirSync(join(cwd, ".hidden"), { recursive: true });
+      writeFileSync(join(cwd, ".hidden", "dot.ts"), "dot\n", "utf8");
+      writeFileSync(join(cwd, "visible.ts"), "visible\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "*.ts" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".hidden/dot.ts\nvisible.ts",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          root: cwd,
+          pattern: "*.ts",
+          matchedFileCount: 2,
+          truncated: false
+        }
+      });
+    } finally {
+      await removeTempProject(repoRoot);
+    }
+  });
+
+  it("fallback broad matches skip git internals while keeping other hidden paths", async () => {
+    const cwd = await makeTempProject("openharness-glob-git-internals-fallback-");
+    try {
+      mkdirSync(join(cwd, ".git"));
+      mkdirSync(join(cwd, ".github", "workflows"), { recursive: true });
+      mkdirSync(join(cwd, ".hidden"));
+      writeFileSync(join(cwd, ".git", "config"), "git\n", "utf8");
+      writeFileSync(
+        join(cwd, ".github", "workflows", "ci.yml"),
+        "ci\n",
+        "utf8"
+      );
+      writeFileSync(join(cwd, ".hidden", "file.ts"), "hidden\n", "utf8");
+      writeFileSync(join(cwd, "visible.txt"), "visible\n", "utf8");
+
+      const result = await createGlobTool({ disableRipgrep: true }).execute(
+        { pattern: "**/*" },
+        { cwd, metadata: {} }
+      );
+
+      expect(result).toMatchObject({
+        output: ".github/workflows/ci.yml\n.hidden/file.ts\nvisible.txt",
+        isError: false,
+        metadata: {
+          tool: "glob",
+          backend: "fallback",
+          root: cwd,
+          pattern: "**/*",
+          matchedFileCount: 3,
+          truncated: false
+        }
+      });
+      expect(result.output).not.toContain(".git/config");
+    } finally {
+      await removeTempProject(cwd);
+    }
+  });
+
   it("fallback does not expose files through internal symlinks when symlinks are supported", async () => {
     const cwd = await makeTempProject("openharness-glob-fallback-link-cwd-");
     const outside = await makeTempProject("openharness-glob-fallback-link-out-");
@@ -1330,7 +1470,19 @@ describe("glob project tool", () => {
       expect(result.isError).toBe(false);
       expect(result.output).toBe("a.ts");
       expect(backend.run).toHaveBeenCalledWith(
-        ["--files", "--hidden", "--color", "never", "--glob", "*.ts", "."],
+        [
+          "--files",
+          "--hidden",
+          "--color",
+          "never",
+          "--glob",
+          "*.ts",
+          "--glob",
+          "!.git/**",
+          "--glob",
+          "!**/.git/**",
+          "."
+        ],
         {
           cwd: join(cwd, "src"),
           timeoutMs: 123,

@@ -13,6 +13,7 @@ import { normalizeProjectPath, resolveExistingProjectPath } from "./paths.js";
 const defaultLimit = 200;
 const maxLimit = 5000;
 const defaultTimeoutMs = 30_000;
+const gitInternalGlobExcludes = ["!.git/**", "!**/.git/**"];
 
 export interface GlobToolInput {
   readonly pattern?: string;
@@ -122,7 +123,7 @@ export function createGlobTool(
           );
         }
 
-        const includeHidden = await isInsideGitRepository(root, context.cwd);
+        const includeHidden = await isInsideGitRepository(root);
         const matchResult =
           options.disableRipgrep === true
             ? await fallbackGlob(
@@ -261,6 +262,7 @@ async function ripgrepGlob(
     "never",
     "--glob",
     pattern,
+    ...gitInternalGlobExcludes.flatMap((glob) => ["--glob", glob]),
     "."
   ];
   const result = await backend.run(
@@ -338,6 +340,7 @@ async function fallbackGlob(
     cwd: root,
     onlyFiles: true,
     dot: includeHidden,
+    ignore: gitInternalGlobExcludes.map((glob) => glob.slice(1)),
     followSymbolicLinks: false
   });
 
@@ -349,17 +352,12 @@ async function fallbackGlob(
   };
 }
 
-async function isInsideGitRepository(root: string, cwd: string): Promise<boolean> {
-  const boundary = await realpath(cwd);
-  let current = root;
+async function isInsideGitRepository(root: string): Promise<boolean> {
+  let current = await realpath(root);
 
-  while (isInsideRoot(boundary, current)) {
+  while (true) {
     if (await hasGitMarker(current)) {
       return true;
-    }
-
-    if (current === boundary) {
-      return false;
     }
 
     const parent = path.dirname(current);
@@ -448,6 +446,10 @@ async function normalizeMatchedPath(
     ? normalized.slice(2)
     : normalized;
 
+  if (isGitInternalPath(relativePath)) {
+    return undefined;
+  }
+
   if (!isSafeRelativeMatch(root, relativePath)) {
     return undefined;
   }
@@ -482,6 +484,10 @@ async function realpathMatchedPath(
 
     throw error;
   }
+}
+
+function isGitInternalPath(projectPath: string): boolean {
+  return splitPathSegments(projectPath).some((segment) => segment === ".git");
 }
 
 function isSafeRelativeGlobPattern(pattern: string): boolean {
