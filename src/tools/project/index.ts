@@ -7,6 +7,9 @@ export {
 export {
   createGlobTool
 } from "./glob.js";
+export {
+  createGrepTool
+} from "./grep.js";
 export type {
   RipgrepBackend,
   RipgrepBackendResult,
@@ -19,6 +22,11 @@ export type {
   CreateGlobToolOptions,
   GlobToolInput
 } from "./glob.js";
+export type {
+  CreateGrepToolOptions,
+  GrepOutputMode,
+  GrepToolInput
+} from "./grep.js";
 export {
   normalizeProjectPath,
   relativeProjectPath,
