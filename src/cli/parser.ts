@@ -117,7 +117,9 @@ function parsePositiveIntegerOption(
   value: string,
   option: string
 ): number | CliParseResult {
-  if (!/^[1-9]\d*$/u.test(value)) {
+  const parsed = Number(value);
+
+  if (!/^[1-9]\d*$/u.test(value) || !Number.isSafeInteger(parsed)) {
     return invalidOptionValue(
       option,
       value,
@@ -125,7 +127,7 @@ function parsePositiveIntegerOption(
     );
   }
 
-  return Number(value);
+  return parsed;
 }
 
 function parsePermissionMode(value: string): PermissionMode | CliParseResult {

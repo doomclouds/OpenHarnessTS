@@ -292,7 +292,7 @@ describe("CLI parser", () => {
   });
 
   it("rejects invalid max turn values", () => {
-    for (const value of ["0", "-1", "1.5", "many"]) {
+    for (const value of ["0", "-1", "1.5", "many", "9".repeat(400)]) {
       expect(
         parseCliArgs(["--print", "hello", "--max-turns", value], {
           version: "1.2.3"
