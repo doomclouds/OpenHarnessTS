@@ -1,4 +1,5 @@
 import type { CliOutputFormat } from "./parser.js";
+import type { CliDryRunPreview } from "./dry-run.js";
 import type { PrintModeResult } from "./print-mode.js";
 import type { StreamEvent } from "../stream-events/index.js";
 
@@ -90,6 +91,11 @@ export interface RenderCliErrorOutputOptions {
   readonly code?: string;
 }
 
+export interface RenderCliDryRunPreviewOptions {
+  readonly preview: CliDryRunPreview;
+  readonly format: CliOutputFormat;
+}
+
 export function renderCliOutput(options: RenderCliOutputOptions): string {
   if (options.format === "text") {
     return `${options.result.assistantText}\n`;
@@ -118,6 +124,16 @@ export function renderCliErrorOutput(
   };
 
   return `${JSON.stringify(output)}\n`;
+}
+
+export function renderCliDryRunPreview(
+  options: RenderCliDryRunPreviewOptions
+): string {
+  if (options.format === "text") {
+    return renderCliDryRunPreviewText(options.preview);
+  }
+
+  return `${JSON.stringify(options.preview)}\n`;
 }
 
 function createFinalResult(
@@ -233,6 +249,114 @@ function createStreamJsonEvents(
 
   events.push(createFinalResult(result, "stream-json"));
   return events;
+}
+
+function renderCliDryRunPreviewText(preview: CliDryRunPreview): string {
+  const lines: string[] = [
+    "OpenHarness Dry Run",
+    "",
+    "Readiness",
+    `  Level: ${preview.readiness.level}`,
+    ...formatList("Reasons", preview.readiness.reasons),
+    ...formatList("Next Actions", preview.readiness.nextActions),
+    "",
+    "Resolved Settings",
+    `  Provider: ${preview.settings.provider} (${preview.settings.providerSource})`,
+    `  API Format: ${preview.settings.apiFormat}`,
+    `  Model: ${preview.settings.model} (${preview.settings.modelSource})`,
+    `  Base URL: ${preview.settings.baseURL} (${preview.settings.baseURLSource})`,
+    `  API Key: ${preview.settings.apiKeySource}`,
+    `  Permission Mode: ${preview.settings.permissionMode}`,
+    `  Output Format: ${preview.settings.outputFormat}`,
+    ...formatOptionalSetting("Max Turns", preview.settings.maxTurns),
+    "",
+    "Paths",
+    `  CWD: ${preview.cwd}`,
+    `  Project Config Dir: ${preview.paths.projectConfigDir}`,
+    `  Session Dir: ${preview.paths.sessionDir}`,
+    "",
+    "Validation",
+    `  Auth: ${preview.validation.authStatus}`,
+    `  API Client: ${preview.validation.apiClient.status}`,
+    ...formatOptionalDetail(preview.validation.apiClient.detail),
+    `  System Prompt Chars: ${preview.validation.systemPromptChars}`,
+    "",
+    "Discovery",
+    ...formatInstructionSources(preview),
+    "",
+    "Available Tools",
+    ...formatTools(preview),
+    "",
+    "Prompt Preview",
+    ...formatPreviewBlock(preview.promptPreview),
+    "",
+    "System Prompt Preview",
+    ...formatPreviewBlock(preview.systemPromptPreview)
+  ];
+
+  return `${lines.join("\n")}\n`;
+}
+
+function formatList(label: string, values: readonly string[]): readonly string[] {
+  if (values.length === 0) {
+    return [`  ${label}: none`];
+  }
+
+  return [`  ${label}:`, ...values.map((value) => `    - ${value}`)];
+}
+
+function formatOptionalSetting(
+  label: string,
+  value: number | undefined
+): readonly string[] {
+  return value === undefined ? [] : [`  ${label}: ${value}`];
+}
+
+function formatOptionalDetail(value: string): readonly string[] {
+  return value.length === 0 ? [] : [`  Detail: ${value}`];
+}
+
+function formatInstructionSources(
+  preview: CliDryRunPreview
+): readonly string[] {
+  if (preview.discovery.instructionSources.length === 0) {
+    return ["  Instruction Sources: none"];
+  }
+
+  return [
+    "  Instruction Sources:",
+    ...preview.discovery.instructionSources.map(
+      (source) =>
+        `    - ${source.kind} #${source.order}: ${source.path} ` +
+        `(${source.loadedCharCount}/${source.originalCharCount} chars, ` +
+        `truncated: ${source.truncated})`
+    )
+  ];
+}
+
+function formatTools(preview: CliDryRunPreview): readonly string[] {
+  if (preview.discovery.tools.length === 0) {
+    return ["  none"];
+  }
+
+  return preview.discovery.tools.map((tool) => {
+    const required = formatArgs(tool.requiredArgs);
+    const optional = formatArgs(tool.optionalArgs);
+
+    return `  - ${tool.name}: ${tool.description} (required: ${required}; optional: ${optional})`;
+  });
+}
+
+function formatArgs(values: readonly string[]): string {
+  return values.length === 0 ? "none" : values.join(", ");
+}
+
+function formatPreviewBlock(value: string): readonly string[] {
+  if (value.length === 0) {
+    return ["  (empty)"];
+  }
+
+  return value.split("\n").map((line) => `  ${line}`);
 }
 
 function assertNever(value: never): never {
