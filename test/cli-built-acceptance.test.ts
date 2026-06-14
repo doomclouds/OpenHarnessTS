@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,12 @@ function removeTempRoot(path: string): void {
   rmSync(path, { recursive: true, force: true });
 }
 
+function createIsolatedProjectRoot(root: string, name: string): string {
+  const cwd = join(root, name);
+  mkdirSync(cwd, { recursive: true });
+  return cwd;
+}
+
 function createIsolatedEnv(
   root: string,
   overrides: NodeJS.ProcessEnv = {}
@@ -29,6 +35,8 @@ function createIsolatedEnv(
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENHARNESS_CONFIG_DIR: join(root, "config"),
+    OPENHARNESS_DATA_DIR: join(root, "data"),
+    OPENHARNESS_LOGS_DIR: join(root, "logs"),
     ...overrides
   };
 
@@ -205,9 +213,10 @@ describe("built CLI executable smoke", () => {
 describe("built CLI dry-run acceptance", () => {
   it("prints bare dry-run text without creating a config directory", async () => {
     const root = createTempRoot("openharness-built-dry-run-text-");
+    const cwd = createIsolatedProjectRoot(root, "project");
 
     try {
-      const result = await runBuiltCli(["--cwd", root, "--dry-run"], {
+      const result = await runBuiltCli(["--cwd", cwd, "--dry-run"], {
         env: createIsolatedEnv(root)
       });
 
@@ -217,7 +226,9 @@ describe("built CLI dry-run acceptance", () => {
       expect(result.stdout).toContain("Available Tools");
       expect(result.stdout).toContain("read_file");
       expect(existsSync(join(root, "config"))).toBe(false);
-      expect(existsSync(join(root, ".openharness"))).toBe(false);
+      expect(existsSync(join(root, "data"))).toBe(false);
+      expect(existsSync(join(root, "logs"))).toBe(false);
+      expect(existsSync(join(cwd, ".openharness"))).toBe(false);
     } finally {
       removeTempRoot(root);
     }
@@ -225,6 +236,7 @@ describe("built CLI dry-run acceptance", () => {
 
   it("prints dry-run JSON for a model prompt without leaking the flag API key", async () => {
     const root = createTempRoot("openharness-built-dry-run-json-");
+    const cwd = createIsolatedProjectRoot(root, "project");
 
     try {
       const result = await runBuiltCli(
@@ -238,18 +250,27 @@ describe("built CLI dry-run acceptance", () => {
           "json"
         ],
         {
-          cwd: root,
+          cwd,
           env: createIsolatedEnv(root)
         }
       );
 
       expectCleanSuccess(result);
-      expect(JSON.parse(result.stdout)).toMatchObject({
+      const payload = JSON.parse(result.stdout) as {
+        readonly cwd?: string;
+        readonly paths?: {
+          readonly sessionDir?: string;
+        };
+      };
+      expect(payload).toMatchObject({
         type: "dry_run_preview",
         mode: "dry-run",
         entrypoint: { kind: "model_prompt" },
         readiness: { level: "ready" }
       });
+      expect(payload.cwd).toBe(resolve(cwd));
+      expect(payload.paths?.sessionDir).toContain(root);
+      expect(payload.paths?.sessionDir).toContain("data");
       expect(result.stdout).not.toContain("flag-key");
     } finally {
       removeTempRoot(root);
@@ -258,12 +279,13 @@ describe("built CLI dry-run acceptance", () => {
 
   it("prints dry-run stream-json as exactly one JSON line", async () => {
     const root = createTempRoot("openharness-built-dry-run-stream-json-");
+    const cwd = createIsolatedProjectRoot(root, "project");
 
     try {
       const result = await runBuiltCli(
         ["--dry-run", "--output-format", "stream-json"],
         {
-          cwd: root,
+          cwd,
           env: createIsolatedEnv(root)
         }
       );
@@ -282,12 +304,13 @@ describe("built CLI dry-run acceptance", () => {
 
   it("prints missing provider key JSON failure without session artifact paths", async () => {
     const root = createTempRoot("openharness-built-missing-key-json-");
+    const cwd = createIsolatedProjectRoot(root, "project");
 
     try {
       const result = await runBuiltCli(
         ["--print", "hello", "--output-format", "json"],
         {
-          cwd: root,
+          cwd,
           env: createIsolatedEnv(root)
         }
       );
