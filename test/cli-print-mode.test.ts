@@ -590,6 +590,36 @@ describe("CLI print-mode integration", () => {
     }
   });
 
+  it("writes stream-json errors to stderr for stream-json output", async () => {
+    const root = await makeTempProject("openharness-cli-stream-json-error-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "Hello.", "--output-format", "stream-json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          printMode: {
+            apiClient: new ThrowingApiClient(),
+            model: "mock-model",
+            sessionId: "cli_stream_json_error"
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(JSON.parse(captured.stderr.join(""))).toEqual({
+        type: "error",
+        outputFormat: "stream-json",
+        message: "API error: network down"
+      });
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
   it("writes print-mode failures to stderr only", async () => {
     const root = await makeTempProject("openharness-cli-print-failure-");
     const captured = createCapturedIo();

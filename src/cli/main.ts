@@ -59,6 +59,8 @@ export function renderHelp(): string {
     "",
     "Options:",
     "  --cwd <dir>    Run from an existing working directory.",
+    "  --output-format <format>",
+    "                 Render print output as text, json, or stream-json.",
     "  --help         Show help.",
     "  --version      Show version.",
     "",

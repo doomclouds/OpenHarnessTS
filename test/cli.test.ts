@@ -605,6 +605,7 @@ describe("CLI runner", () => {
     await expect(runCli(["--help"], captured.io, { version: "1.2.3" })).resolves.toBe(0);
     expect(captured.stdout.join("")).toContain("OpenHarness");
     expect(captured.stdout.join("")).toContain("openharness --print <prompt>");
+    expect(captured.stdout.join("")).toContain("--output-format <format>");
     expect(captured.stdout.join("")).toContain(
       "print mode only when a provider is configured"
     );
@@ -901,6 +902,54 @@ describe("CLI runner", () => {
       expect(captured.stdout).toEqual([]);
       expect(captured.stderr.join("")).toContain("[REDACTED]");
       expect(captured.stderr.join("")).not.toContain("flag-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts the resolved API key from direct json runtime errors", async () => {
+    const root = createTempDir("openharness-cli-direct-json-redaction-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-secret",
+          "--output-format",
+          "json"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient() {
+            return {
+              chat: {
+                completions: {
+                  async create() {
+                    throw new Error("request failed with flag-secret");
+                  }
+                }
+              }
+            };
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      const error = JSON.parse(captured.stderr.join("")) as { readonly message: string };
+      expect(error).toEqual({
+        type: "error",
+        outputFormat: "json",
+        message: "API error: request failed with [REDACTED]"
+      });
+      expect(error.message).not.toContain("flag-secret");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
