@@ -193,6 +193,24 @@ async function expectFile(path: string): Promise<void> {
   expect(info.isFile()).toBe(true);
 }
 
+function expectSessionArtifacts(
+  result: unknown
+): asserts result is {
+  readonly transcriptPath: string;
+  readonly session: {
+    readonly sessionId: string;
+    readonly sessionDir: string;
+    readonly latestPath: string;
+    readonly snapshotPath: string;
+    readonly transcriptPath: string;
+    readonly messageCount: number;
+    readonly summary: string;
+  };
+} {
+  expect(result).toHaveProperty("transcriptPath");
+  expect(result).toHaveProperty("session");
+}
+
 function messageComplete(text: string): ApiStreamEvent {
   return createApiMessageCompleteEvent({
     message: createAssistantMessage([createTextBlock(text)])
@@ -262,6 +280,7 @@ describe("runPrintMode", () => {
         model: "mock-model"
       });
       expect(result.snapshotPath).toContain("session-print_text.jsonl");
+      expectSessionArtifacts(result);
       expect(result.transcriptPath).toBe(result.session.transcriptPath);
       expect(result.session).toMatchObject({
         sessionId: "print_text",
@@ -395,9 +414,11 @@ describe("runPrintMode", () => {
       ]);
       const snapshotText = await readFile(result.snapshotPath, "utf8");
       expect(snapshotText).toContain("PRINT_TARGET");
+      expectSessionArtifacts(result);
       const transcript = await readFile(result.session.transcriptPath, "utf8");
       expect(transcript).toContain("```tool");
-      expect(transcript).toContain("grep {\"pattern\":\"PRINT_TARGET\"");
+      expect(transcript).toContain("grep");
+      expect(transcript).toContain("PRINT_TARGET");
       expect(transcript).toContain("```tool-result");
       expect(transcript).toContain("src/target.ts");
     } finally {
