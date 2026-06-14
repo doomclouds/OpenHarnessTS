@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DeepSeekSdkClient, DeepSeekSdkOptions } from "../api/index.js";
+import { renderCliErrorOutput, renderCliOutput } from "./output.js";
 import { parseCliArgs, type CliPrintOptions } from "./parser.js";
 import {
   PrintModeError,
@@ -92,6 +93,7 @@ export async function runCli(
   }
 
   let provider: CliPrintProvider | undefined;
+  const outputFormat = result.options.outputFormat;
 
   try {
     let printOptions: RunPrintModeOptions;
@@ -108,11 +110,16 @@ export async function runCli(
     }
 
     const printResult = await runPrintMode(printOptions);
-    io.stdout(`${printResult.assistantText}\n`);
+    io.stdout(renderCliOutput({ result: printResult, format: outputFormat }));
     return 0;
   } catch (error) {
     const message = getPrintModeErrorMessage(error);
-    io.stderr(`${provider?.redact(message) ?? message}\n`);
+    io.stderr(
+      renderCliErrorOutput({
+        format: outputFormat,
+        message: provider?.redact(message) ?? message
+      })
+    );
     return 1;
   }
 }
