@@ -64,6 +64,18 @@ class EmptySessionBackend implements SessionBackend {
   }
 }
 
+const expectedSession = {
+  sessionId: "session_output",
+  sessionDir: "C:\\work\\project\\.openharness",
+  latestPath: "C:\\work\\project\\.openharness\\latest.json",
+  snapshotPath:
+    "C:\\work\\project\\.openharness\\session-session_output.jsonl",
+  transcriptPath:
+    "C:\\work\\project\\.openharness\\transcript-session_output.md",
+  messageCount: 2,
+  summary: "Hello"
+} as const;
+
 function createResult(): PrintModeResult {
   return {
     assistantText: "Hello from OpenHarness.",
@@ -74,17 +86,7 @@ function createResult(): PrintModeResult {
       "C:\\work\\project\\.openharness\\session-session_output.jsonl",
     transcriptPath:
       "C:\\work\\project\\.openharness\\transcript-session_output.md",
-    session: {
-      sessionId: "session_output",
-      sessionDir: "C:\\work\\project\\.openharness",
-      latestPath: "C:\\work\\project\\.openharness\\latest.json",
-      snapshotPath:
-        "C:\\work\\project\\.openharness\\session-session_output.jsonl",
-      transcriptPath:
-        "C:\\work\\project\\.openharness\\transcript-session_output.md",
-      messageCount: 2,
-      summary: "Hello"
-    },
+    session: expectedSession,
     sessionBackend: new EmptySessionBackend(),
     events: [
       createStatusEvent("starting"),
@@ -168,17 +170,7 @@ describe("renderCliOutput", () => {
     expect(parsed.snapshotPath).toBe(
       "C:\\work\\project\\.openharness\\session-session_output.jsonl"
     );
-    expect(parsed.session).toEqual({
-      sessionId: "session_output",
-      sessionDir: "C:\\work\\project\\.openharness",
-      latestPath: "C:\\work\\project\\.openharness\\latest.json",
-      snapshotPath:
-        "C:\\work\\project\\.openharness\\session-session_output.jsonl",
-      transcriptPath:
-        "C:\\work\\project\\.openharness\\transcript-session_output.md",
-      messageCount: 2,
-      summary: "Hello"
-    });
+    expect(parsed.session).toEqual(expectedSession);
     expect(parsed.session.sessionId).toBe(parsed.sessionId);
     expect(parsed.session.snapshotPath).toBe(parsed.snapshotPath);
     expect(parsed.summary).toMatchObject({
@@ -199,7 +191,11 @@ describe("renderCliOutput", () => {
       result: createResult(),
       format: "stream-json"
     });
-    const lines = parseJsonLines(output) as Array<{ readonly type: string }>;
+    const lines = parseJsonLines(output) as Array<{
+      readonly type: string;
+      readonly snapshotPath?: string;
+      readonly session?: typeof expectedSession;
+    }>;
 
     expect(lines.map((line) => line.type)).toEqual([
       "status",
@@ -215,12 +211,14 @@ describe("renderCliOutput", () => {
       outputFormat: "stream-json",
       assistantText: "Hello from OpenHarness.",
       sessionId: "session_output",
-      session: {
-        sessionId: "session_output",
-        transcriptPath:
-          "C:\\work\\project\\.openharness\\transcript-session_output.md"
-      }
+      snapshotPath: expectedSession.snapshotPath,
+      session: expectedSession
     });
+    const final = lines.at(-1) as {
+      readonly snapshotPath: string;
+      readonly session: { readonly snapshotPath: string };
+    };
+    expect(final.session.snapshotPath).toBe(final.snapshotPath);
   });
 });
 
