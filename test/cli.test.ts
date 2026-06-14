@@ -67,8 +67,79 @@ describe("CLI parser", () => {
 
     expect(parseCliArgs(["--print", "hello"], { cwd, version: "1.2.3" })).toEqual({
       type: "print",
-      prompt: "hello",
-      cwd: resolve(cwd)
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd)
+      }
+    });
+  });
+
+  it("parses provider and runtime flags for print mode", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(
+        [
+          "--cwd",
+          cwd,
+          "--print",
+          "hello",
+          "--model",
+          "deepseek-test",
+          "--api-key",
+          "flag-key",
+          "--base-url",
+          "https://deepseek.example.com///",
+          "--max-turns",
+          "3",
+          "--permission-mode",
+          "full_auto"
+        ],
+        { version: "1.2.3" }
+      )
+    ).toEqual({
+      type: "print",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        model: "deepseek-test",
+        apiKey: "flag-key",
+        baseURL: "https://deepseek.example.com///",
+        maxTurns: 3,
+        permissionMode: "full_auto"
+      }
+    });
+  });
+
+  it("parses every supported permission mode", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--print", "hello", "--permission-mode", "default"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { permissionMode: "default" }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--permission-mode", "plan"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { permissionMode: "plan" }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--permission-mode", "full_auto"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { permissionMode: "full_auto" }
     });
   });
 
@@ -104,8 +175,10 @@ describe("CLI parser", () => {
         })
       ).toEqual({
         type: "print",
-        prompt: "hello",
-        cwd: resolve(root)
+        options: {
+          prompt: "hello",
+          cwd: resolve(root)
+        }
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -158,17 +231,96 @@ describe("CLI parser", () => {
     }
   });
 
-  it("rejects unknown options after print prompt", () => {
+  it("rejects missing provider flag values", () => {
+    expect(parseCliArgs(["--print", "hello", "--model"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--model",
+        value: "",
+        message: "--model requires a non-empty value."
+      }
+    });
+    expect(parseCliArgs(["--print", "hello", "--api-key"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--api-key",
+        value: "",
+        message: "--api-key requires a non-empty value."
+      }
+    });
+    expect(parseCliArgs(["--print", "hello", "--base-url"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--base-url",
+        value: "",
+        message: "--base-url requires a non-empty value."
+      }
+    });
+  });
+
+  it("rejects invalid max turn values", () => {
+    for (const value of ["0", "-1", "1.5", "many"]) {
+      expect(
+        parseCliArgs(["--print", "hello", "--max-turns", value], {
+          version: "1.2.3"
+        })
+      ).toEqual({
+        type: "error",
+        error: {
+          code: "invalid_option_value",
+          option: "--max-turns",
+          value,
+          message: "--max-turns requires a positive integer value."
+        }
+      });
+    }
+  });
+
+  it("rejects invalid permission modes", () => {
     expect(
-      parseCliArgs(["--print", "hello", "--model", "deepseek-chat"], {
+      parseCliArgs(["--print", "hello", "--permission-mode", "auto"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--permission-mode",
+        value: "auto",
+        message: "--permission-mode must be one of: default, plan, full_auto."
+      }
+    });
+  });
+
+  it("keeps future output format flags unknown", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "json"], {
         version: "1.2.3"
       })
     ).toEqual({
       type: "error",
       error: {
         code: "unknown_option",
-        option: "--model",
-        message: "Unknown option: --model"
+        option: "--output-format",
+        message: "Unknown option: --output-format"
+      }
+    });
+  });
+
+  it("rejects unknown options after print prompt", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--unknown-option"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--unknown-option",
+        message: "Unknown option: --unknown-option"
       }
     });
   });
