@@ -28,6 +28,16 @@ export interface CliRunSummary {
   readonly errors: readonly CliErrorSummary[];
 }
 
+export interface CliSessionArtifacts {
+  readonly sessionId: string;
+  readonly sessionDir: string;
+  readonly latestPath: string;
+  readonly snapshotPath: string;
+  readonly transcriptPath: string;
+  readonly messageCount: number;
+  readonly summary: string;
+}
+
 export interface CliFinalResultOutput {
   readonly type: "final_result";
   readonly outputFormat: "json" | "stream-json";
@@ -36,6 +46,7 @@ export interface CliFinalResultOutput {
   readonly cwd: string;
   readonly model: string;
   readonly snapshotPath: string;
+  readonly session: CliSessionArtifacts;
   readonly summary: CliRunSummary;
 }
 
@@ -148,7 +159,22 @@ function createFinalResult(
     cwd: result.cwd,
     model: result.model,
     snapshotPath: result.snapshotPath,
+    session: createCliSessionArtifacts(result),
     summary: summarizeEvents(result.events)
+  };
+}
+
+function createCliSessionArtifacts(
+  result: PrintModeResult
+): CliSessionArtifacts {
+  return {
+    sessionId: result.session.sessionId,
+    sessionDir: result.session.sessionDir,
+    latestPath: result.session.latestPath,
+    snapshotPath: result.session.snapshotPath,
+    transcriptPath: result.session.transcriptPath,
+    messageCount: result.session.messageCount,
+    summary: result.session.summary
   };
 }
 

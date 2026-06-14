@@ -64,13 +64,29 @@ class EmptySessionBackend implements SessionBackend {
   }
 }
 
+const expectedSession = {
+  sessionId: "session_output",
+  sessionDir: "C:\\work\\project\\.openharness",
+  latestPath: "C:\\work\\project\\.openharness\\latest.json",
+  snapshotPath:
+    "C:\\work\\project\\.openharness\\session-session_output.jsonl",
+  transcriptPath:
+    "C:\\work\\project\\.openharness\\transcript-session_output.md",
+  messageCount: 2,
+  summary: "Hello"
+} as const;
+
 function createResult(): PrintModeResult {
   return {
     assistantText: "Hello from OpenHarness.",
     sessionId: "session_output",
     cwd: "C:\\work\\project",
     model: "deepseek-test",
-    snapshotPath: "C:\\work\\project\\.openharness\\session.jsonl",
+    snapshotPath:
+      "C:\\work\\project\\.openharness\\session-session_output.jsonl",
+    transcriptPath:
+      "C:\\work\\project\\.openharness\\transcript-session_output.md",
+    session: expectedSession,
     sessionBackend: new EmptySessionBackend(),
     events: [
       createStatusEvent("starting"),
@@ -123,6 +139,15 @@ describe("renderCliOutput", () => {
       readonly cwd: string;
       readonly model: string;
       readonly snapshotPath: string;
+      readonly session: {
+        readonly sessionId: string;
+        readonly sessionDir: string;
+        readonly latestPath: string;
+        readonly snapshotPath: string;
+        readonly transcriptPath: string;
+        readonly messageCount: number;
+        readonly summary: string;
+      };
       readonly summary: {
         readonly eventCount: number;
         readonly textDeltaCount: number;
@@ -132,6 +157,8 @@ describe("renderCliOutput", () => {
         readonly errors: readonly unknown[];
       };
       readonly events?: unknown;
+      readonly messages?: unknown;
+      readonly transcript?: unknown;
     };
 
     expect(parsed.type).toBe("final_result");
@@ -141,8 +168,11 @@ describe("renderCliOutput", () => {
     expect(parsed.cwd).toBe("C:\\work\\project");
     expect(parsed.model).toBe("deepseek-test");
     expect(parsed.snapshotPath).toBe(
-      "C:\\work\\project\\.openharness\\session.jsonl"
+      "C:\\work\\project\\.openharness\\session-session_output.jsonl"
     );
+    expect(parsed.session).toEqual(expectedSession);
+    expect(parsed.session.sessionId).toBe(parsed.sessionId);
+    expect(parsed.session.snapshotPath).toBe(parsed.snapshotPath);
     expect(parsed.summary).toMatchObject({
       eventCount: 7,
       textDeltaCount: 2,
@@ -152,6 +182,35 @@ describe("renderCliOutput", () => {
     expect(parsed.summary.statuses).toHaveLength(1);
     expect(parsed.summary.errors).toHaveLength(1);
     expect(parsed.events).toBeUndefined();
+    expect(parsed.messages).toBeUndefined();
+    expect(parsed.transcript).toBeUndefined();
+  });
+
+  it("projects session metadata without leaking extra session fields", () => {
+    const result = {
+      ...createResult(),
+      session: {
+        ...expectedSession,
+        messages: ["raw message"],
+        transcript: "raw transcript",
+        sessionBackend: { unsafe: true }
+      }
+    } as unknown as PrintModeResult;
+
+    const parsed = JSON.parse(
+      renderCliOutput({ result, format: "json" })
+    ) as {
+      readonly session: typeof expectedSession & {
+        readonly messages?: unknown;
+        readonly transcript?: unknown;
+        readonly sessionBackend?: unknown;
+      };
+    };
+
+    expect(parsed.session).toEqual(expectedSession);
+    expect(parsed.session.messages).toBeUndefined();
+    expect(parsed.session.transcript).toBeUndefined();
+    expect(parsed.session.sessionBackend).toBeUndefined();
   });
 
   it("renders stream-json output as ordered json lines ending in final result", () => {
@@ -159,7 +218,11 @@ describe("renderCliOutput", () => {
       result: createResult(),
       format: "stream-json"
     });
-    const lines = parseJsonLines(output) as Array<{ readonly type: string }>;
+    const lines = parseJsonLines(output) as Array<{
+      readonly type: string;
+      readonly snapshotPath?: string;
+      readonly session?: typeof expectedSession;
+    }>;
 
     expect(lines.map((line) => line.type)).toEqual([
       "status",
@@ -170,12 +233,43 @@ describe("renderCliOutput", () => {
       "error",
       "final_result"
     ]);
-    expect(lines.at(-1)).toMatchObject({
+    const final = lines.at(-1) as {
+      readonly type: string;
+      readonly outputFormat: string;
+      readonly assistantText: string;
+      readonly sessionId: string;
+      readonly cwd: string;
+      readonly model: string;
+      readonly snapshotPath: string;
+      readonly summary: unknown;
+      readonly session: typeof expectedSession & {
+        readonly messages?: unknown;
+        readonly transcript?: unknown;
+      };
+      readonly messages?: unknown;
+      readonly transcript?: unknown;
+    };
+
+    expect(final).toMatchObject({
       type: "final_result",
       outputFormat: "stream-json",
       assistantText: "Hello from OpenHarness.",
-      sessionId: "session_output"
+      sessionId: "session_output",
+      cwd: "C:\\work\\project",
+      model: "deepseek-test",
+      snapshotPath: expectedSession.snapshotPath
     });
+    expect(final.summary).toMatchObject({
+      eventCount: 7,
+      textDeltaCount: 2,
+      toolCallCount: 1
+    });
+    expect(final.session).toEqual(expectedSession);
+    expect(final.session.snapshotPath).toBe(final.snapshotPath);
+    expect(final.messages).toBeUndefined();
+    expect(final.transcript).toBeUndefined();
+    expect(final.session.messages).toBeUndefined();
+    expect(final.session.transcript).toBeUndefined();
   });
 });
 
