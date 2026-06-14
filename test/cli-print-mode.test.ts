@@ -1,6 +1,6 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createApiMessageCompleteEvent,
@@ -89,6 +89,51 @@ class FailingSessionBackend implements SessionBackend {
   }
 }
 
+class FailingTranscriptSessionBackend implements SessionBackend {
+  public readonly savedSnapshots: SaveSessionSnapshotArgs[] = [];
+
+  public async saveSnapshot(
+    args: SaveSessionSnapshotArgs
+  ): Promise<SessionSnapshot> {
+    this.savedSnapshots.push(args);
+    return {
+      sessionId: args.sessionId ?? "transcript_failure",
+      cwd: resolve(String(args.cwd)),
+      model: args.model,
+      systemPrompt: args.systemPrompt,
+      messages: args.messages,
+      ...(args.usage === undefined ? {} : { usage: args.usage }),
+      toolMetadata: args.toolMetadata ?? {},
+      createdAt: args.createdAt ?? "2026-06-14T00:00:00.000Z",
+      updatedAt: args.updatedAt ?? "2026-06-14T00:00:00.000Z",
+      summary: "Save.",
+      messageCount: args.messages.length,
+      path: join(resolve(String(args.cwd)), "session-transcript_failure.jsonl")
+    };
+  }
+
+  public async loadLatest(): Promise<SessionSnapshot | undefined> {
+    return undefined;
+  }
+
+  public async loadById(): Promise<SessionSnapshot | undefined> {
+    return undefined;
+  }
+
+  public async listRecent(
+    _cwd: string | URL,
+    _options?: ListSessionsOptions
+  ): Promise<readonly SessionSummary[]> {
+    return [];
+  }
+
+  public async exportTranscript(
+    _args: ExportSessionTranscriptArgs
+  ): Promise<string> {
+    throw new Error("transcript disk full");
+  }
+}
+
 interface CapturedIo {
   readonly stdout: string[];
   readonly stderr: string[];
@@ -141,6 +186,11 @@ function createIsolatedRuntimePaths(root: string): IsolatedRuntimePaths {
 
 async function removeTempProject(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
+}
+
+async function expectFile(path: string): Promise<void> {
+  const info = await stat(path);
+  expect(info.isFile()).toBe(true);
 }
 
 function messageComplete(text: string): ApiStreamEvent {
@@ -212,6 +262,25 @@ describe("runPrintMode", () => {
         model: "mock-model"
       });
       expect(result.snapshotPath).toContain("session-print_text.jsonl");
+      expect(result.transcriptPath).toBe(result.session.transcriptPath);
+      expect(result.session).toMatchObject({
+        sessionId: "print_text",
+        sessionDir: dirname(result.snapshotPath),
+        latestPath: join(dirname(result.snapshotPath), "latest.json"),
+        snapshotPath: result.snapshotPath,
+        transcriptPath: join(
+          dirname(result.snapshotPath),
+          "transcript-print_text.md"
+        ),
+        messageCount: 2,
+        summary: "Say hello."
+      });
+      expect(basename(result.session.transcriptPath)).toBe(
+        "transcript-print_text.md"
+      );
+      await expectFile(result.session.snapshotPath);
+      await expectFile(result.session.latestPath);
+      await expectFile(result.session.transcriptPath);
       expect(result.events.map((event) => event.type)).toEqual([
         "assistant_text_delta",
         "assistant_text_delta",
@@ -224,6 +293,13 @@ describe("runPrintMode", () => {
       expect(getMessageText(latest?.messages.at(-1) as ConversationMessage)).toBe(
         "Hello, project."
       );
+      expect(latest?.messageCount).toBe(result.session.messageCount);
+      const transcript = await readFile(result.session.transcriptPath, "utf8");
+      expect(transcript).toContain("# OpenHarness Session Transcript");
+      expect(transcript).toContain("## User");
+      expect(transcript).toContain("Say hello.");
+      expect(transcript).toContain("## Assistant");
+      expect(transcript).toContain("Hello, project.");
       expect(client.requests).toHaveLength(1);
     } finally {
       await removeTempProject(root);
@@ -319,6 +395,11 @@ describe("runPrintMode", () => {
       ]);
       const snapshotText = await readFile(result.snapshotPath, "utf8");
       expect(snapshotText).toContain("PRINT_TARGET");
+      const transcript = await readFile(result.session.transcriptPath, "utf8");
+      expect(transcript).toContain("```tool");
+      expect(transcript).toContain("grep {\"pattern\":\"PRINT_TARGET\"");
+      expect(transcript).toContain("```tool-result");
+      expect(transcript).toContain("src/target.ts");
     } finally {
       await removeTempProject(root);
     }
@@ -414,6 +495,33 @@ describe("runPrintMode", () => {
       ).rejects.toMatchObject({
         message: "Session snapshot save failed: disk full"
       });
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
+  it("fails when the session transcript cannot be exported", async () => {
+    const root = await makeTempProject("openharness-print-transcript-error-");
+    const runtimePaths = createIsolatedRuntimePaths(root);
+    const client = new ScriptedApiClient([[messageComplete("Saved text.")]]);
+    const sessionBackend = new FailingTranscriptSessionBackend();
+
+    try {
+      await expect(
+        runPrintMode({
+          prompt: "Save.",
+          cwd: root,
+          homeDir: runtimePaths.homeDir,
+          env: runtimePaths.env,
+          apiClient: client,
+          model: "mock-model",
+          sessionId: "transcript_failure",
+          sessionBackend
+        })
+      ).rejects.toMatchObject({
+        message: "Session transcript export failed: transcript disk full"
+      });
+      expect(sessionBackend.savedSnapshots).toHaveLength(1);
     } finally {
       await removeTempProject(root);
     }
