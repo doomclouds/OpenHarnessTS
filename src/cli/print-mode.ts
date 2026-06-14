@@ -1,5 +1,6 @@
 import type { ApiClient } from "../api/index.js";
 import { getMessageText } from "../messages/index.js";
+import type { PermissionMode } from "../permissions/index.js";
 import { buildProjectRuntime } from "../project-runtime/index.js";
 import type {
   SessionBackend,
@@ -22,6 +23,8 @@ export interface PrintModeProviderOptions {
   readonly apiClient: ApiClient;
   readonly model: string;
   readonly maxTokens?: number;
+  readonly maxTurns?: number;
+  readonly permissionMode?: PermissionMode;
   readonly signal?: AbortSignal;
   readonly sessionId?: string;
   readonly sessionBackend?: SessionBackend;
@@ -65,6 +68,10 @@ export async function runPrintMode(
     ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
     ...(options.env === undefined ? {} : { env: options.env }),
     ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+    ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
+    ...(options.permissionMode === undefined
+      ? {}
+      : { permissionMode: options.permissionMode }),
     ...(options.signal === undefined ? {} : { signal: options.signal })
   });
   const events: StreamEvent[] = [];
