@@ -121,7 +121,11 @@ describe("CLI parser", () => {
       })
     ).toMatchObject({
       type: "print",
-      options: { permissionMode: "default" }
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        permissionMode: "default"
+      }
     });
     expect(
       parseCliArgs(["--print", "hello", "--permission-mode", "plan"], {
@@ -130,7 +134,11 @@ describe("CLI parser", () => {
       })
     ).toMatchObject({
       type: "print",
-      options: { permissionMode: "plan" }
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        permissionMode: "plan"
+      }
     });
     expect(
       parseCliArgs(["--print", "hello", "--permission-mode", "full_auto"], {
@@ -139,7 +147,11 @@ describe("CLI parser", () => {
       })
     ).toMatchObject({
       type: "print",
-      options: { permissionMode: "full_auto" }
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        permissionMode: "full_auto"
+      }
     });
   });
 
@@ -257,6 +269,24 @@ describe("CLI parser", () => {
         option: "--base-url",
         value: "",
         message: "--base-url requires a non-empty value."
+      }
+    });
+    expect(parseCliArgs(["--print", "hello", "--max-turns"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--max-turns",
+        value: "",
+        message: "--max-turns requires a non-empty value."
+      }
+    });
+    expect(parseCliArgs(["--print", "hello", "--permission-mode"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--permission-mode",
+        value: "",
+        message: "--permission-mode requires a non-empty value."
       }
     });
   });
