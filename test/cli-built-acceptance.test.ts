@@ -294,6 +294,11 @@ describe("built CLI dry-run acceptance", () => {
 
       expectStderrOnlyFailure(result);
       const error = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(Object.keys(error).sort()).toEqual([
+        "message",
+        "outputFormat",
+        "type"
+      ]);
       expect(error).toMatchObject({
         type: "error",
         outputFormat: "json"
