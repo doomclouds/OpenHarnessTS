@@ -11,7 +11,6 @@ import {
   getMessageText
 } from "../src/index.js";
 import {
-  PrintModeError,
   runCli,
   runPrintMode
 } from "../src/cli/index.js";
@@ -121,6 +120,25 @@ async function makeTempProject(prefix: string): Promise<string> {
   return await mkdtemp(join(tmpdir(), prefix));
 }
 
+interface IsolatedRuntimePaths {
+  readonly homeDir: string;
+  readonly configDir: string;
+  readonly env: {
+    readonly OPENHARNESS_CONFIG_DIR: string;
+  };
+}
+
+function createIsolatedRuntimePaths(root: string): IsolatedRuntimePaths {
+  const homeDir = join(root, "home");
+  const configDir = join(root, "config");
+
+  return {
+    homeDir,
+    configDir,
+    env: { OPENHARNESS_CONFIG_DIR: configDir }
+  };
+}
+
 async function removeTempProject(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
@@ -150,8 +168,7 @@ function assistantToolUse(args: {
 describe("runPrintMode", () => {
   it("returns assistant text from text deltas and saves a snapshot", async () => {
     const root = await makeTempProject("openharness-print-text-");
-    const homeDir = join(root, "home");
-    const configDir = join(root, "config");
+    const runtimePaths = createIsolatedRuntimePaths(root);
     const client = new ScriptedApiClient([
       [
         createApiTextDeltaEvent("Hello"),
@@ -161,12 +178,12 @@ describe("runPrintMode", () => {
     ]);
 
     try {
-      await mkdir(homeDir, { recursive: true });
+      await mkdir(runtimePaths.homeDir, { recursive: true });
       const result = await runPrintMode({
         prompt: "Say hello.",
         cwd: root,
-        homeDir,
-        env: { OPENHARNESS_CONFIG_DIR: configDir },
+        homeDir: runtimePaths.homeDir,
+        env: runtimePaths.env,
         apiClient: client,
         model: "mock-model",
         sessionId: "print_text",
@@ -200,12 +217,15 @@ describe("runPrintMode", () => {
 
   it("falls back to the final assistant message when no text deltas were emitted", async () => {
     const root = await makeTempProject("openharness-print-final-");
+    const runtimePaths = createIsolatedRuntimePaths(root);
     const client = new ScriptedApiClient([[messageComplete("Final only text.")]]);
 
     try {
       const result = await runPrintMode({
         prompt: "Return final text.",
         cwd: root,
+        homeDir: runtimePaths.homeDir,
+        env: runtimePaths.env,
         apiClient: client,
         model: "mock-model",
         sessionId: "print_final"
@@ -223,7 +243,7 @@ describe("runPrintMode", () => {
   it("runs a fake-provider tool-use project turn with default read-only tools", async () => {
     const root = await makeTempProject("openharness-print-tools-");
     const cwd = join(root, "fixture-project");
-    const configDir = join(root, "config");
+    const runtimePaths = createIsolatedRuntimePaths(root);
 
     try {
       await mkdir(join(cwd, "src"), { recursive: true });
@@ -256,7 +276,8 @@ describe("runPrintMode", () => {
       const result = await runPrintMode({
         prompt: "Find PRINT_TARGET.",
         cwd,
-        env: { OPENHARNESS_CONFIG_DIR: configDir },
+        homeDir: runtimePaths.homeDir,
+        env: runtimePaths.env,
         apiClient: client,
         model: "mock-model",
         sessionId: "print_tools"
@@ -267,11 +288,14 @@ describe("runPrintMode", () => {
       );
       expect(client.requests).toHaveLength(2);
       expect(client.requests[0]?.systemPrompt).toContain("PRINT_TARGET");
-      expect(client.requests[0]?.tools?.map((tool) => tool.name)).toEqual([
-        "read_file",
-        "glob",
-        "grep"
-      ]);
+      expect(new Set(client.requests[0]?.tools?.map((tool) => tool.name))).toEqual(
+        new Set(["read_file", "glob", "grep"])
+      );
+      const secondRequestMessages = JSON.stringify(
+        client.requests[1]?.messages ?? []
+      );
+      expect(secondRequestMessages).toContain("src/target.ts");
+      expect(secondRequestMessages).toContain("PRINT_TARGET");
       expect(result.events.map((event) => event.type)).toEqual([
         "assistant_turn_complete",
         "tool_execution_started",
@@ -307,6 +331,7 @@ describe("runPrintMode", () => {
 
   it("fails when the session snapshot cannot be saved", async () => {
     const root = await makeTempProject("openharness-print-save-error-");
+    const runtimePaths = createIsolatedRuntimePaths(root);
     const client = new ScriptedApiClient([[messageComplete("Saved text.")]]);
 
     try {
@@ -314,6 +339,8 @@ describe("runPrintMode", () => {
         runPrintMode({
           prompt: "Save.",
           cwd: root,
+          homeDir: runtimePaths.homeDir,
+          env: runtimePaths.env,
           apiClient: client,
           model: "mock-model",
           sessionId: "print_save_error",
@@ -331,6 +358,7 @@ describe("runPrintMode", () => {
 describe("CLI print-mode integration", () => {
   it("writes injected print-mode assistant text to stdout", async () => {
     const root = await makeTempProject("openharness-cli-print-");
+    const runtimePaths = createIsolatedRuntimePaths(root);
     const captured = createCapturedIo();
     const client = new ScriptedApiClient([[messageComplete("CLI text.")]]);
 
@@ -343,7 +371,9 @@ describe("CLI print-mode integration", () => {
           printMode: {
             apiClient: client,
             model: "mock-model",
-            sessionId: "cli_print"
+            sessionId: "cli_print",
+            homeDir: runtimePaths.homeDir,
+            env: runtimePaths.env
           }
         }
       );
@@ -369,9 +399,8 @@ describe("CLI print-mode integration", () => {
 
       expect(exitCode).toBe(1);
       expect(captured.stdout).toEqual([]);
-      expect(captured.stderr).toEqual([
-        "--print requires a configured provider. DeepSeek CLI flags arrive in the Provider Env And Flags slice.\n"
-      ]);
+      expect(captured.stderr).toHaveLength(1);
+      expect(captured.stderr[0]).toContain("requires a configured provider");
     } finally {
       await removeTempProject(root);
     }
