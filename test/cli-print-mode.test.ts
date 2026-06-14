@@ -96,8 +96,9 @@ class FailingTranscriptSessionBackend implements SessionBackend {
     args: SaveSessionSnapshotArgs
   ): Promise<SessionSnapshot> {
     this.savedSnapshots.push(args);
+    const sessionId = args.sessionId ?? "transcript_failure";
     return {
-      sessionId: args.sessionId ?? "transcript_failure",
+      sessionId,
       cwd: resolve(String(args.cwd)),
       model: args.model,
       systemPrompt: args.systemPrompt,
@@ -108,7 +109,7 @@ class FailingTranscriptSessionBackend implements SessionBackend {
       updatedAt: args.updatedAt ?? "2026-06-14T00:00:00.000Z",
       summary: "Save.",
       messageCount: args.messages.length,
-      path: join(resolve(String(args.cwd)), "session-transcript_failure.jsonl")
+      path: join(resolve(String(args.cwd)), `session-${sessionId}.jsonl`)
     };
   }
 
@@ -644,8 +645,18 @@ describe("CLI print-mode integration", () => {
       await expectFile(parsed.session.snapshotPath);
       await expectFile(parsed.session.latestPath);
       await expectFile(parsed.session.transcriptPath);
-      const latest = await readFile(parsed.session.latestPath, "utf8");
-      expect(latest).toContain("\"sessionId\": \"cli_json_output\"");
+      const latest = JSON.parse(
+        await readFile(parsed.session.latestPath, "utf8")
+      ) as {
+        readonly sessionId: string;
+        readonly path: string;
+        readonly messageCount: number;
+        readonly summary: string;
+      };
+      expect(latest.sessionId).toBe(parsed.session.sessionId);
+      expect(latest.path).toBe(basename(parsed.session.snapshotPath));
+      expect(latest.messageCount).toBe(parsed.session.messageCount);
+      expect(latest.summary).toBe(parsed.session.summary);
     } finally {
       await removeTempProject(root);
     }
@@ -693,6 +704,8 @@ describe("CLI print-mode integration", () => {
       ]);
       const final = lines.at(-1) as {
         readonly type: string;
+        readonly outputFormat: string;
+        readonly snapshotPath: string;
         readonly session: {
           readonly sessionId: string;
           readonly snapshotPath: string;
@@ -700,6 +713,9 @@ describe("CLI print-mode integration", () => {
           readonly latestPath: string;
         };
       };
+      expect(final.type).toBe("final_result");
+      expect(final.outputFormat).toBe("stream-json");
+      expect(final.session.snapshotPath).toBe(final.snapshotPath);
       expect(final.session.sessionId).toBe("cli_stream_json_output");
       await expectFile(final.session.snapshotPath);
       await expectFile(final.session.latestPath);
