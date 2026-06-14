@@ -1003,6 +1003,162 @@ describe("CLI runner", () => {
     expect(sdkOptions).toEqual([]);
   });
 
+  it("runs bare dry-run without creating a provider", async () => {
+    const root = createTempDir("openharness-cli-dry-run-bare-");
+    const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+
+    try {
+      const exitCode = await runCli(["--cwd", root, "--dry-run"], captured.io, {
+        version: "1.2.3",
+        env: createIsolatedCliEnv(root),
+        createSdkClient(options) {
+          sdkOptions.push(options);
+          return createFakeSdkClient([[textDeltaChunk("unused")]]).client;
+        }
+      });
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      expect(captured.stdout.join("")).toContain("OpenHarness Dry Run");
+      expect(captured.stdout.join("")).toContain("interactive_session");
+      expect(sdkOptions).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns blocked dry-run readiness without failing the process", async () => {
+    const root = createTempDir("openharness-cli-dry-run-blocked-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--dry-run", "--print", "hello"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root)
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      expect(captured.stdout.join("")).toContain("- level: blocked");
+      expect(captured.stdout.join("")).toContain("DEEPSEEK_API_KEY");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes dry-run json output", async () => {
+    const root = createTempDir("openharness-cli-dry-run-json-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--dry-run",
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-key",
+          "--output-format",
+          "json"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root)
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      const parsed = JSON.parse(captured.stdout.join("")) as {
+        readonly type: string;
+        readonly mode: string;
+        readonly entrypoint: { readonly kind: string };
+        readonly readiness: { readonly level: string };
+      };
+      expect(parsed).toMatchObject({
+        type: "dry_run_preview",
+        mode: "dry-run",
+        entrypoint: { kind: "model_prompt" },
+        readiness: { level: "ready" }
+      });
+      expect(captured.stdout.join("")).not.toContain("flag-key");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes dry-run stream-json output as one json line", async () => {
+    const root = createTempDir("openharness-cli-dry-run-stream-json-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--dry-run", "--output-format", "stream-json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root)
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      const lines = captured.stdout.join("").trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+        type: "dry_run_preview",
+        mode: "dry-run"
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not call injected print-mode during dry-run", async () => {
+    const root = createTempDir("openharness-cli-dry-run-no-print-mode-");
+    const captured = createCapturedIo();
+    let printModeCalled = false;
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--dry-run", "--print", "hello"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          printMode: {
+            apiClient: {
+              async *streamMessage() {
+                printModeCalled = true;
+                yield {
+                  type: "message_complete",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "unused" }]
+                  }
+                };
+              }
+            },
+            model: "mock-model"
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(printModeCalled).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("redacts the resolved API key from direct print-mode runtime errors", async () => {
     const root = createTempDir("openharness-cli-direct-redaction-");
     const captured = createCapturedIo();
