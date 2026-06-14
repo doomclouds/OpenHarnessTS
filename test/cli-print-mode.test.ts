@@ -451,6 +451,94 @@ describe("CLI print-mode integration", () => {
     }
   });
 
+  it("writes json output to stdout", async () => {
+    const root = await makeTempProject("openharness-cli-json-output-");
+    const runtimePaths = createIsolatedRuntimePaths(root);
+    const captured = createCapturedIo();
+    const client = new ScriptedApiClient([[messageComplete("JSON text.")]]);
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "Hello.", "--output-format", "json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          printMode: {
+            apiClient: client,
+            model: "mock-model",
+            sessionId: "cli_json_output",
+            homeDir: runtimePaths.homeDir,
+            env: runtimePaths.env
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      const parsed = JSON.parse(captured.stdout.join("")) as {
+        readonly type: string;
+        readonly outputFormat: string;
+        readonly assistantText: string;
+        readonly sessionId: string;
+        readonly snapshotPath: string;
+      };
+      expect(parsed).toMatchObject({
+        type: "final_result",
+        outputFormat: "json",
+        assistantText: "JSON text.",
+        sessionId: "cli_json_output"
+      });
+      expect(parsed.snapshotPath).toContain("session-cli_json_output.jsonl");
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
+  it("writes stream-json output to stdout", async () => {
+    const root = await makeTempProject("openharness-cli-stream-json-output-");
+    const runtimePaths = createIsolatedRuntimePaths(root);
+    const captured = createCapturedIo();
+    const client = new ScriptedApiClient([
+      [
+        createApiTextDeltaEvent("Stream"),
+        createApiTextDeltaEvent(" text."),
+        messageComplete("Stream text.")
+      ]
+    ]);
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "Hello.", "--output-format", "stream-json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          printMode: {
+            apiClient: client,
+            model: "mock-model",
+            sessionId: "cli_stream_json_output",
+            homeDir: runtimePaths.homeDir,
+            env: runtimePaths.env
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      const lines = captured.stdout
+        .join("")
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { readonly type: string });
+      expect(lines.map((line) => line.type)).toEqual([
+        "assistant_text_delta",
+        "assistant_text_delta",
+        "final_result"
+      ]);
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
   it("returns a missing API key error without injected print-mode provider", async () => {
     const root = await makeTempProject("openharness-cli-print-missing-provider-");
     const captured = createCapturedIo();
@@ -467,6 +555,66 @@ describe("CLI print-mode integration", () => {
       expect(captured.stderr).toEqual([
         "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.\n"
       ]);
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
+  it("writes json errors to stderr for json output", async () => {
+    const root = await makeTempProject("openharness-cli-json-error-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "Hello.", "--output-format", "json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          printMode: {
+            apiClient: new ThrowingApiClient(),
+            model: "mock-model",
+            sessionId: "cli_json_error"
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(JSON.parse(captured.stderr.join(""))).toEqual({
+        type: "error",
+        outputFormat: "json",
+        message: "API error: network down"
+      });
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
+  it("writes stream-json errors to stderr for stream-json output", async () => {
+    const root = await makeTempProject("openharness-cli-stream-json-error-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "Hello.", "--output-format", "stream-json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          printMode: {
+            apiClient: new ThrowingApiClient(),
+            model: "mock-model",
+            sessionId: "cli_stream_json_error"
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(JSON.parse(captured.stderr.join(""))).toEqual({
+        type: "error",
+        outputFormat: "stream-json",
+        message: "API error: network down"
+      });
     } finally {
       await removeTempProject(root);
     }

@@ -180,8 +180,54 @@ describe("CLI parser", () => {
       type: "print",
       options: {
         prompt: "hello",
-        cwd: resolve(cwd)
+        cwd: resolve(cwd),
+        outputFormat: "text"
       }
+    });
+  });
+
+  it("defaults print output format to text", () => {
+    const cwd = process.cwd();
+
+    expect(parseCliArgs(["--print", "hello"], { cwd, version: "1.2.3" })).toMatchObject({
+      type: "print",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
+  it("parses every supported output format", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "text"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { outputFormat: "text" }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "json"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { outputFormat: "json" }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "stream-json"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { outputFormat: "stream-json" }
     });
   });
 
@@ -217,7 +263,8 @@ describe("CLI parser", () => {
         apiKey: "flag-key",
         baseURL: "https://deepseek.example.com///",
         maxTurns: 3,
-        permissionMode: "full_auto"
+        permissionMode: "full_auto",
+        outputFormat: "text"
       }
     });
   });
@@ -300,7 +347,8 @@ describe("CLI parser", () => {
         type: "print",
         options: {
           prompt: "hello",
-          cwd: resolve(root)
+          cwd: resolve(root),
+          outputFormat: "text"
         }
       });
     } finally {
@@ -402,6 +450,59 @@ describe("CLI parser", () => {
     });
   });
 
+  it("rejects missing output format values", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--output-format",
+        value: "",
+        message: "--output-format requires a non-empty value."
+      }
+    });
+  });
+
+  it("rejects invalid output format values", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "xml"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--output-format",
+        value: "xml",
+        message: "--output-format must be one of: text, json, stream-json."
+      }
+    });
+  });
+
+  it("does not add output format aliases", () => {
+    expect(parseCliArgs(["--print", "hello", "--json"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--json",
+        message: "Unknown option: --json"
+      }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--stream-json"], { version: "1.2.3" })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--stream-json",
+        message: "Unknown option: --stream-json"
+      }
+    });
+  });
+
   it("rejects invalid max turn values", () => {
     for (const value of ["0", "-1", "1.5", "many", "9".repeat(400)]) {
       expect(
@@ -432,21 +533,6 @@ describe("CLI parser", () => {
         option: "--permission-mode",
         value: "auto",
         message: "--permission-mode must be one of: default, plan, full_auto."
-      }
-    });
-  });
-
-  it("keeps future output format flags unknown", () => {
-    expect(
-      parseCliArgs(["--print", "hello", "--output-format", "json"], {
-        version: "1.2.3"
-      })
-    ).toEqual({
-      type: "error",
-      error: {
-        code: "unknown_option",
-        option: "--output-format",
-        message: "Unknown option: --output-format"
       }
     });
   });
@@ -519,6 +605,7 @@ describe("CLI runner", () => {
     await expect(runCli(["--help"], captured.io, { version: "1.2.3" })).resolves.toBe(0);
     expect(captured.stdout.join("")).toContain("OpenHarness");
     expect(captured.stdout.join("")).toContain("openharness --print <prompt>");
+    expect(captured.stdout.join("")).toContain("--output-format <format>");
     expect(captured.stdout.join("")).toContain(
       "print mode only when a provider is configured"
     );
@@ -815,6 +902,54 @@ describe("CLI runner", () => {
       expect(captured.stdout).toEqual([]);
       expect(captured.stderr.join("")).toContain("[REDACTED]");
       expect(captured.stderr.join("")).not.toContain("flag-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts the resolved API key from direct json runtime errors", async () => {
+    const root = createTempDir("openharness-cli-direct-json-redaction-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-secret",
+          "--output-format",
+          "json"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient() {
+            return {
+              chat: {
+                completions: {
+                  async create() {
+                    throw new Error("request failed with flag-secret");
+                  }
+                }
+              }
+            };
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      const error = JSON.parse(captured.stderr.join("")) as { readonly message: string };
+      expect(error).toEqual({
+        type: "error",
+        outputFormat: "json",
+        message: "API error: request failed with [REDACTED]"
+      });
+      expect(error.message).not.toContain("flag-secret");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
