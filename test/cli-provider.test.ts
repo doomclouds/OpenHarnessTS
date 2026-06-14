@@ -203,6 +203,8 @@ describe("resolveCliProviderPreview", () => {
         detail: ""
       }
     });
+    expect(JSON.stringify(preview)).not.toContain("flag-key");
+    expect(JSON.stringify(preview)).not.toContain("env-key");
   });
 
   it("reports environment sources", () => {
@@ -215,7 +217,9 @@ describe("resolveCliProviderPreview", () => {
       }
     });
 
-    expect(preview).toMatchObject({
+    expect(preview).toEqual({
+      provider: "deepseek",
+      apiFormat: "openai-compatible",
       model: "env-model",
       modelSource: "env",
       baseURL: "https://env.example.com",
@@ -224,6 +228,7 @@ describe("resolveCliProviderPreview", () => {
       authStatus: "configured",
       apiClientValidation: { status: "ok", detail: "" }
     });
+    expect(JSON.stringify(preview)).not.toContain("env-key");
   });
 
   it("reports defaults and missing auth without exposing keys", () => {
@@ -246,7 +251,5 @@ describe("resolveCliProviderPreview", () => {
         detail: MISSING_DEEPSEEK_API_KEY_MESSAGE
       }
     });
-    expect(JSON.stringify(preview)).not.toContain("env-key");
-    expect(JSON.stringify(preview)).not.toContain("flag-key");
   });
 });
