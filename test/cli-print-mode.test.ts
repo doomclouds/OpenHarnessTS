@@ -166,6 +166,21 @@ function assistantToolUse(args: {
 }
 
 describe("runPrintMode", () => {
+  it("rejects an empty prompt before calling the provider", async () => {
+    const client = new ScriptedApiClient([[messageComplete("unused")]]);
+
+    await expect(
+      runPrintMode({
+        prompt: "   ",
+        apiClient: client,
+        model: "mock-model"
+      })
+    ).rejects.toMatchObject({
+      message: "print prompt is required."
+    });
+    expect(client.requests).toEqual([]);
+  });
+
   it("returns assistant text from text deltas and saves a snapshot", async () => {
     const root = await makeTempProject("openharness-print-text-");
     const runtimePaths = createIsolatedRuntimePaths(root);

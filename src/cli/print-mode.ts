@@ -3,8 +3,7 @@ import { getMessageText } from "../messages/index.js";
 import { buildProjectRuntime } from "../project-runtime/index.js";
 import type {
   SessionBackend,
-  SessionSnapshot,
-  SessionStorageOptions
+  SessionSnapshot
 } from "../sessions/index.js";
 import type {
   AssistantTurnCompleteEvent,
@@ -24,15 +23,16 @@ export interface PrintModeProviderOptions {
   readonly model: string;
   readonly maxTokens?: number;
   readonly signal?: AbortSignal;
-}
-
-export interface RunPrintModeOptions
-  extends PrintModeProviderOptions,
-    SessionStorageOptions {
-  readonly prompt: string;
-  readonly cwd?: string | URL;
   readonly sessionId?: string;
   readonly sessionBackend?: SessionBackend;
+  readonly homeDir?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly now?: () => Date;
+}
+
+export interface RunPrintModeOptions extends PrintModeProviderOptions {
+  readonly prompt: string;
+  readonly cwd?: string | URL;
 }
 
 export interface PrintModeResult {
@@ -48,6 +48,12 @@ export interface PrintModeResult {
 export async function runPrintMode(
   options: RunPrintModeOptions
 ): Promise<PrintModeResult> {
+  const prompt = options.prompt.trim();
+
+  if (prompt.length === 0) {
+    throw new PrintModeError("print prompt is required.");
+  }
+
   const runtime = buildProjectRuntime({
     apiClient: options.apiClient,
     model: options.model,
@@ -66,7 +72,7 @@ export async function runPrintMode(
   let finalAssistantEvent: AssistantTurnCompleteEvent | undefined;
   let usage: UsageSnapshot | undefined;
 
-  for await (const event of runtime.engine.submitMessage(options.prompt)) {
+  for await (const event of runtime.engine.submitMessage(prompt)) {
     events.push(event);
 
     switch (event.type) {
