@@ -2,12 +2,19 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseCliArgs } from "./parser.js";
+import type { DeepSeekSdkClient, DeepSeekSdkOptions } from "../api/index.js";
+import { parseCliArgs, type CliPrintOptions } from "./parser.js";
 import {
   PrintModeError,
   runPrintMode,
-  type PrintModeProviderOptions
+  type PrintModeProviderOptions,
+  type RunPrintModeOptions
 } from "./print-mode.js";
+import {
+  CliProviderError,
+  createCliPrintProvider,
+  type CliPrintProvider
+} from "./provider.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -17,6 +24,8 @@ export interface CliIo {
 export interface RunCliOptions {
   readonly cwd?: string;
   readonly version?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly createSdkClient?: (options: DeepSeekSdkOptions) => DeepSeekSdkClient;
   readonly printMode?: PrintModeProviderOptions;
 }
 
@@ -81,25 +90,71 @@ export async function runCli(
     return 1;
   }
 
-  if (options.printMode === undefined) {
-    io.stderr(
-      "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
-    );
-    return 1;
-  }
+  let provider: CliPrintProvider | undefined;
 
   try {
-    const printResult = await runPrintMode({
-      prompt: result.options.prompt,
-      cwd: result.options.cwd,
-      ...options.printMode
-    });
+    let printOptions: RunPrintModeOptions;
+    if (options.printMode === undefined) {
+      const setup = createDirectPrintModeSetup(result.options, options);
+      provider = setup.provider;
+      printOptions = setup.options;
+    } else {
+      printOptions = {
+        prompt: result.options.prompt,
+        cwd: result.options.cwd,
+        ...options.printMode
+      };
+    }
+
+    const printResult = await runPrintMode(printOptions);
     io.stdout(`${printResult.assistantText}\n`);
     return 0;
   } catch (error) {
-    io.stderr(`${getPrintModeErrorMessage(error)}\n`);
+    const message = getPrintModeErrorMessage(error);
+    io.stderr(`${provider?.redact(message) ?? message}\n`);
     return 1;
   }
+}
+
+interface DirectPrintModeSetup {
+  readonly provider: CliPrintProvider;
+  readonly options: RunPrintModeOptions;
+}
+
+function createDirectPrintModeSetup(
+  flags: CliPrintOptions,
+  options: RunCliOptions
+): DirectPrintModeSetup {
+  let provider: CliPrintProvider;
+
+  try {
+    provider = createCliPrintProvider({
+      flags,
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.createSdkClient === undefined
+        ? {}
+        : { createSdkClient: options.createSdkClient })
+    });
+  } catch (error) {
+    if (error instanceof CliProviderError) {
+      throw error;
+    }
+
+    throw new CliProviderError(getPrintModeErrorMessage(error));
+  }
+
+  return {
+    provider,
+    options: {
+      prompt: flags.prompt,
+      cwd: flags.cwd,
+      apiClient: provider.apiClient,
+      model: provider.model,
+      permissionMode: provider.permissionMode,
+      ...(provider.maxTurns === undefined ? {} : { maxTurns: provider.maxTurns }),
+      ...(options.env === undefined ? {} : { env: options.env })
+    }
+  };
 }
 
 function getPrintModeErrorMessage(error: unknown): string {

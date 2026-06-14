@@ -1,9 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs, runCli } from "../src/cli/index.js";
+import type {
+  DeepSeekSdkClient,
+  DeepSeekSdkOptions
+} from "../src/index.js";
 
 interface CapturedIo {
   readonly stdout: string[];
@@ -35,6 +39,84 @@ function createCapturedIo(): CapturedIo & {
 
 function createTempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
+}
+
+interface FakeSdkClient {
+  readonly client: DeepSeekSdkClient;
+  readonly requests: unknown[];
+}
+
+function createFakeSdkClient(
+  turns: readonly (readonly unknown[])[]
+): FakeSdkClient {
+  const requests: unknown[] = [];
+
+  return {
+    requests,
+    client: {
+      chat: {
+        completions: {
+          async create(...args: readonly unknown[]) {
+            requests.push(args[0]);
+            const turn = turns[requests.length - 1];
+
+            if (turn === undefined) {
+              throw new Error(`No scripted SDK turn ${requests.length}.`);
+            }
+
+            return (async function* () {
+              for (const chunk of turn) {
+                yield chunk;
+              }
+            })();
+          }
+        }
+      }
+    }
+  };
+}
+
+function textDeltaChunk(text: string): unknown {
+  return {
+    choices: [
+      {
+        delta: {
+          content: text
+        }
+      }
+    ]
+  };
+}
+
+function toolCallChunk(args: {
+  readonly id: string;
+  readonly name: string;
+  readonly input: Readonly<Record<string, unknown>>;
+}): unknown {
+  return {
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            {
+              index: 0,
+              id: args.id,
+              function: {
+                name: args.name,
+                arguments: JSON.stringify(args.input)
+              }
+            }
+          ]
+        }
+      }
+    ]
+  };
+}
+
+function createIsolatedCliEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    OPENHARNESS_CONFIG_DIR: join(root, "config")
+  };
 }
 
 describe("CLI parser", () => {
@@ -430,14 +512,216 @@ describe("CLI runner", () => {
     expect(captured.stderr.join("")).toContain("No command mode selected");
   });
 
-  it("writes unconfigured print provider errors to stderr only", async () => {
+  it("creates a DeepSeek provider from direct flags and writes assistant text to stdout", async () => {
+    const root = createTempDir("openharness-cli-direct-provider-");
     const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+    const fakeSdk = createFakeSdkClient([[textDeltaChunk("Flag text.")]]);
 
-    await expect(runCli(["--print", "hello"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-key",
+          "--model",
+          "deepseek-test"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient(options) {
+            sdkOptions.push(options);
+            return fakeSdk.client;
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stdout).toEqual(["Flag text.\n"]);
+      expect(captured.stderr).toEqual([]);
+      expect(sdkOptions).toEqual([
+        {
+          apiKey: "flag-key",
+          baseURL: "https://api.deepseek.com"
+        }
+      ]);
+      expect(fakeSdk.requests).toHaveLength(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses DEEPSEEK_API_KEY from RunCliOptions.env when no direct key is passed", async () => {
+    const root = createTempDir("openharness-cli-env-provider-");
+    const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+    const fakeSdk = createFakeSdkClient([[textDeltaChunk("Env text.")]]);
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "hello"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: {
+            ...createIsolatedCliEnv(root),
+            DEEPSEEK_API_KEY: "env-key"
+          },
+          createSdkClient(options) {
+            sdkOptions.push(options);
+            return fakeSdk.client;
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stdout).toEqual(["Env text.\n"]);
+      expect(captured.stderr).toEqual([]);
+      expect(sdkOptions).toEqual([
+        {
+          apiKey: "env-key",
+          baseURL: "https://api.deepseek.com"
+        }
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets direct provider flags override RunCliOptions.env", async () => {
+    const root = createTempDir("openharness-cli-flag-env-provider-");
+    const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+    const fakeSdk = createFakeSdkClient([[textDeltaChunk("Override text.")]]);
+
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-key",
+          "--base-url",
+          "https://flag.example.com///",
+          "--model",
+          "flag-model"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: {
+            ...createIsolatedCliEnv(root),
+            DEEPSEEK_API_KEY: "env-key",
+            DEEPSEEK_BASE_URL: "https://env.example.com",
+            DEEPSEEK_MODEL: "env-model"
+          },
+          createSdkClient(options) {
+            sdkOptions.push(options);
+            return fakeSdk.client;
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stdout).toEqual(["Override text.\n"]);
+      expect(captured.stderr).toEqual([]);
+      expect(sdkOptions).toEqual([
+        {
+          apiKey: "flag-key",
+          baseURL: "https://flag.example.com"
+        }
+      ]);
+      expect(JSON.stringify(fakeSdk.requests[0])).toContain("flag-model");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards max turns and permission mode through the direct runCli path", async () => {
+    const root = createTempDir("openharness-cli-direct-runtime-flags-");
+    const cwd = join(root, "fixture-project");
+    const captured = createCapturedIo();
+    const fakeSdk = createFakeSdkClient([
+      [
+        toolCallChunk({
+          id: "toolu_grep",
+          name: "grep",
+          input: {
+            pattern: "PRINT_TARGET",
+            glob: "src/**/*.ts",
+            headLimit: 10
+          }
+        })
+      ]
+    ]);
+
+    try {
+      mkdirSync(join(cwd, "src"), { recursive: true });
+      writeFileSync(
+        join(cwd, "src", "target.ts"),
+        "export const PRINT_TARGET = \"cli print mode\";\n",
+        "utf8"
+      );
+
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          cwd,
+          "--print",
+          "Find PRINT_TARGET.",
+          "--api-key",
+          "flag-key",
+          "--max-turns",
+          "1",
+          "--permission-mode",
+          "plan"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient() {
+            return fakeSdk.client;
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(captured.stderr).toEqual(["Max turns exceeded: 1\n"]);
+      expect(fakeSdk.requests).toHaveLength(1);
+      expect(JSON.stringify(fakeSdk.requests[0])).toContain("- Current mode: plan");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the stable missing key error without creating an SDK client", async () => {
+    const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+
+    await expect(
+      runCli(["--print", "hello"], captured.io, {
+        version: "1.2.3",
+        env: {},
+        createSdkClient(options) {
+          sdkOptions.push(options);
+          return createFakeSdkClient([[textDeltaChunk("unused")]]).client;
+        }
+      })
+    ).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
     expect(captured.stderr).toEqual([
-      "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
+      "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.\n"
     ]);
+    expect(sdkOptions).toEqual([]);
   });
 
   it("writes parser errors to stderr only", async () => {
@@ -446,6 +730,99 @@ describe("CLI runner", () => {
     await expect(runCli(["--unknown-option"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
     expect(captured.stderr).toEqual(["Unknown option: --unknown-option\n"]);
+  });
+
+  it("does not create a provider for help, version, or parser errors", async () => {
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+
+    for (const argv of [["--help"], ["--version"], ["--unknown-option"]]) {
+      const captured = createCapturedIo();
+
+      await runCli(argv, captured.io, {
+        version: "1.2.3",
+        env: {
+          DEEPSEEK_API_KEY: "env-key"
+        },
+        createSdkClient(options) {
+          sdkOptions.push(options);
+          return createFakeSdkClient([[textDeltaChunk("unused")]]).client;
+        }
+      });
+    }
+
+    expect(sdkOptions).toEqual([]);
+  });
+
+  it("redacts the resolved API key from direct print-mode runtime errors", async () => {
+    const root = createTempDir("openharness-cli-direct-redaction-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "hello", "--api-key", "flag-secret"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient() {
+            return {
+              chat: {
+                completions: {
+                  async create() {
+                    throw new Error("request failed with flag-secret");
+                  }
+                }
+              }
+            };
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(captured.stderr.join("")).toContain("[REDACTED]");
+      expect(captured.stderr.join("")).not.toContain("flag-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps injected print-mode path working without a DeepSeek API key", async () => {
+    const root = createTempDir("openharness-cli-injected-provider-");
+    const captured = createCapturedIo();
+
+    try {
+      await expect(
+        runCli(["--cwd", root, "--print", "hello"], captured.io, {
+          version: "1.2.3",
+          env: {},
+          printMode: {
+            apiClient: {
+              async *streamMessage() {
+                yield {
+                  type: "message_complete",
+                  message: {
+                    role: "assistant",
+                    content: [
+                      {
+                        type: "text",
+                        text: "Injected text."
+                      }
+                    ]
+                  }
+                };
+              }
+            },
+            model: "mock-model",
+            env: createIsolatedCliEnv(root)
+          }
+        })
+      ).resolves.toBe(0);
+      expect(captured.stdout).toEqual(["Injected text.\n"]);
+      expect(captured.stderr).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

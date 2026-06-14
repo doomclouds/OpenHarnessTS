@@ -451,7 +451,7 @@ describe("CLI print-mode integration", () => {
     }
   });
 
-  it("returns a provider-not-configured error without injected print-mode provider", async () => {
+  it("returns a missing API key error without injected print-mode provider", async () => {
     const root = await makeTempProject("openharness-cli-print-missing-provider-");
     const captured = createCapturedIo();
 
@@ -459,13 +459,13 @@ describe("CLI print-mode integration", () => {
       const exitCode = await runCli(
         ["--cwd", root, "--print", "Hello."],
         captured.io,
-        { version: "1.2.3" }
+        { version: "1.2.3", env: {} }
       );
 
       expect(exitCode).toBe(1);
       expect(captured.stdout).toEqual([]);
       expect(captured.stderr).toEqual([
-        "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
+        "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.\n"
       ]);
     } finally {
       await removeTempProject(root);
