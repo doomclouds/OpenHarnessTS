@@ -185,6 +185,51 @@ describe("CLI parser", () => {
     });
   });
 
+  it("defaults print output format to text", () => {
+    const cwd = process.cwd();
+
+    expect(parseCliArgs(["--print", "hello"], { cwd, version: "1.2.3" })).toMatchObject({
+      type: "print",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
+  it("parses every supported output format", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "text"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { outputFormat: "text" }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "json"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { outputFormat: "json" }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "stream-json"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "print",
+      options: { outputFormat: "stream-json" }
+    });
+  });
+
   it("parses provider and runtime flags for print mode", () => {
     const cwd = process.cwd();
 
@@ -402,6 +447,59 @@ describe("CLI parser", () => {
     });
   });
 
+  it("rejects missing output format values", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--output-format",
+        value: "",
+        message: "--output-format requires a non-empty value."
+      }
+    });
+  });
+
+  it("rejects invalid output format values", () => {
+    expect(
+      parseCliArgs(["--print", "hello", "--output-format", "xml"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--output-format",
+        value: "xml",
+        message: "--output-format must be one of: text, json, stream-json."
+      }
+    });
+  });
+
+  it("does not add output format aliases", () => {
+    expect(parseCliArgs(["--print", "hello", "--json"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--json",
+        message: "Unknown option: --json"
+      }
+    });
+    expect(
+      parseCliArgs(["--print", "hello", "--stream-json"], { version: "1.2.3" })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--stream-json",
+        message: "Unknown option: --stream-json"
+      }
+    });
+  });
+
   it("rejects invalid max turn values", () => {
     for (const value of ["0", "-1", "1.5", "many", "9".repeat(400)]) {
       expect(
@@ -432,21 +530,6 @@ describe("CLI parser", () => {
         option: "--permission-mode",
         value: "auto",
         message: "--permission-mode must be one of: default, plan, full_auto."
-      }
-    });
-  });
-
-  it("keeps future output format flags unknown", () => {
-    expect(
-      parseCliArgs(["--print", "hello", "--output-format", "json"], {
-        version: "1.2.3"
-      })
-    ).toEqual({
-      type: "error",
-      error: {
-        code: "unknown_option",
-        option: "--output-format",
-        message: "Unknown option: --output-format"
       }
     });
   });
