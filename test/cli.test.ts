@@ -349,12 +349,12 @@ describe("CLI parser", () => {
   });
 
   it("rejects unknown options", () => {
-    expect(parseCliArgs(["--model", "deepseek-chat"], { version: "1.2.3" })).toEqual({
+    expect(parseCliArgs(["--unknown-option"], { version: "1.2.3" })).toEqual({
       type: "error",
       error: {
         code: "unknown_option",
-        option: "--model",
-        message: "Unknown option: --model"
+        option: "--unknown-option",
+        message: "Unknown option: --unknown-option"
       }
     });
   });
@@ -413,9 +413,9 @@ describe("CLI runner", () => {
   it("writes parser errors to stderr only", async () => {
     const captured = createCapturedIo();
 
-    await expect(runCli(["--model", "deepseek-chat"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
+    await expect(runCli(["--unknown-option"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
-    expect(captured.stderr).toEqual(["Unknown option: --model\n"]);
+    expect(captured.stderr).toEqual(["Unknown option: --unknown-option\n"]);
   });
 });
 
