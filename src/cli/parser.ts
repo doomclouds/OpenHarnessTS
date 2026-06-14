@@ -52,18 +52,6 @@ export type CliParseResult =
   | { readonly type: "dry_run"; readonly options: CliDryRunOptions }
   | { readonly type: "error"; readonly error: CliParseError };
 
-type CliParseResultWithoutDryRun = Exclude<
-  CliParseResult,
-  { readonly type: "dry_run" }
->;
-
-type CliParseResultForArgs<TArgs extends readonly string[]> =
-  string extends TArgs[number]
-    ? CliParseResultWithoutDryRun
-    : "--dry-run" extends TArgs[number]
-      ? CliParseResult
-      : CliParseResultWithoutDryRun;
-
 function missingPrintPrompt(): CliParseResult {
   return {
     type: "error",
@@ -193,10 +181,6 @@ function isExistingDirectory(path: string): boolean {
   }
 }
 
-export function parseCliArgs<const TArgs extends readonly string[]>(
-  args: TArgs,
-  options?: ParseCliArgsOptions
-): CliParseResultForArgs<TArgs>;
 export function parseCliArgs(
   args: readonly string[],
   options: ParseCliArgsOptions = {}

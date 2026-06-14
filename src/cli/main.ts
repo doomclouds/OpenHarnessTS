@@ -94,6 +94,12 @@ export async function runCli(
     return 1;
   }
 
+  if (result.type === "dry_run") {
+    // Temporary guard until the dry-run runner task wires the preview.
+    io.stderr("Dry-run preview is not wired yet.\n");
+    return 1;
+  }
+
   let provider: CliPrintProvider | undefined;
   const outputFormat = result.options.outputFormat;
 
