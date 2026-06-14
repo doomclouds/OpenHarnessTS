@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 interface CliProcessResult {
@@ -122,6 +123,167 @@ function expectStderrOnlyFailure(result: CliProcessResult): void {
   expect(result.exitCode).toBe(1);
   expect(result.stdout).toBe("");
   expect(result.stderr.length).toBeGreaterThan(0);
+}
+
+async function createFixtureProject(root: string): Promise<string> {
+  const cwd = join(root, "fixture-project");
+  await mkdir(join(cwd, "src"), { recursive: true });
+  await writeFile(
+    join(cwd, "AGENTS.md"),
+    [
+      "# Fixture Agent Instructions",
+      "",
+      "Always mention CLI_ACCEPTANCE_TARGET when summarizing this project.",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  await writeFile(
+    join(cwd, "README.md"),
+    "# CLI Acceptance Fixture\n\nThis project exists for built CLI acceptance.\n",
+    "utf8"
+  );
+  await writeFile(
+    join(cwd, "src", "alpha.ts"),
+    [
+      'export const CLI_ACCEPTANCE_TARGET = "built cli acceptance";',
+      "export function describeAcceptance(): string {",
+      "  return CLI_ACCEPTANCE_TARGET;",
+      "}",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+
+  return cwd;
+}
+
+interface BuiltPrintEnvelope {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly requests: readonly unknown[];
+}
+
+function getBuiltCliModuleUrl(): string {
+  return pathToFileURL(distCliPath).href;
+}
+
+async function writeBuiltPrintRunner(args: {
+  readonly root: string;
+  readonly cwd: string;
+  readonly outputFormat: "text" | "json" | "stream-json";
+}): Promise<string> {
+  const runnerPath = join(args.root, `built-print-${args.outputFormat}.mjs`);
+  const runnerSource = `
+import { runCli } from ${JSON.stringify(getBuiltCliModuleUrl())};
+import {
+  createApiMessageCompleteEvent,
+  createAssistantMessage,
+  createTextBlock,
+  createToolUseBlock
+} from ${JSON.stringify(pathToFileURL(join(repoRoot, "dist", "index.js")).href)};
+
+function messageComplete(text) {
+  return createApiMessageCompleteEvent({
+    message: createAssistantMessage([createTextBlock(text)])
+  });
+}
+
+function assistantToolUse(id, name, input) {
+  return createApiMessageCompleteEvent({
+    message: createAssistantMessage([
+      createToolUseBlock({
+        id,
+        name,
+        input
+      })
+    ])
+  });
+}
+
+const requests = [];
+const turns = [
+  [
+    assistantToolUse("toolu_grep", "grep", {
+      pattern: "CLI_ACCEPTANCE_TARGET",
+      glob: "**/*",
+      headLimit: 20
+    })
+  ],
+  [
+    assistantToolUse("toolu_read_alpha", "read_file", {
+      path: "src/alpha.ts"
+    })
+  ],
+  [
+    assistantToolUse("toolu_read_agents", "read_file", {
+      path: "AGENTS.md"
+    })
+  ],
+  [messageComplete("CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts.")]
+];
+
+const apiClient = {
+  async *streamMessage(request) {
+    requests.push({
+      ...request,
+      messages: [...request.messages],
+      ...(request.tools === undefined ? {} : { tools: [...request.tools] })
+    });
+    const turn = turns[requests.length - 1];
+    if (turn === undefined) {
+      throw new Error(\`No scripted turn \${requests.length}.\`);
+    }
+    for (const event of turn) {
+      yield event;
+    }
+  }
+};
+
+const stdout = [];
+const stderr = [];
+const capturedIo = {
+  stdout(text) {
+    stdout.push(text);
+  },
+  stderr(text) {
+    stderr.push(text);
+  }
+};
+const env = process.env;
+const exitCode = await runCli(
+  [
+    "--cwd",
+    ${JSON.stringify(args.cwd)},
+    "--print",
+    "Inspect the fixture project and identify CLI_ACCEPTANCE_TARGET.",
+    "--output-format",
+    ${JSON.stringify(args.outputFormat)}
+  ],
+  capturedIo,
+  {
+    env,
+    printMode: {
+      apiClient,
+      model: "mock-model",
+      env
+    }
+  }
+);
+
+process.stdout.write(
+  JSON.stringify({
+    exitCode,
+    stdout: stdout.join(""),
+    stderr: stderr.join(""),
+    requests
+  })
+);
+`;
+  await writeFile(runnerPath, runnerSource, "utf8");
+
+  return runnerPath;
 }
 
 describe("built CLI acceptance precondition", () => {
@@ -336,6 +498,110 @@ describe("built CLI dry-run acceptance", () => {
       expect(result.stderr).not.toContain("transcriptPath");
       expect(result.stderr).not.toContain("latestPath");
       expect(result.stderr).not.toContain("sessionDir");
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+});
+
+describe("built CLI fixture print acceptance", () => {
+  it("renders built JSON print output with fixture session artifacts", async () => {
+    const root = createTempRoot("openharness-built-print-json-");
+
+    try {
+      const cwd = await createFixtureProject(root);
+      const runnerPath = await writeBuiltPrintRunner({
+        root,
+        cwd,
+        outputFormat: "json"
+      });
+      const runner = await runProcess([runnerPath], {
+        env: createIsolatedEnv(root),
+        timeoutMs: 15_000
+      });
+
+      expectCleanSuccess(runner);
+      const envelope = JSON.parse(runner.stdout) as BuiltPrintEnvelope;
+      expect(envelope.exitCode).toBe(0);
+      expect(envelope.stderr).toBe("");
+      expect(envelope.requests).toHaveLength(4);
+
+      const output = JSON.parse(envelope.stdout) as {
+        readonly type: string;
+        readonly outputFormat: string;
+        readonly assistantText: string;
+        readonly cwd: string;
+        readonly model: string;
+        readonly snapshotPath: string;
+        readonly session: {
+          readonly sessionId: string;
+          readonly sessionDir: string;
+          readonly latestPath: string;
+          readonly snapshotPath: string;
+          readonly transcriptPath: string;
+          readonly messageCount: number;
+          readonly summary: string;
+          readonly messages?: unknown;
+          readonly transcript?: unknown;
+          readonly sessionBackend?: unknown;
+        };
+        readonly messages?: unknown;
+        readonly transcript?: unknown;
+        readonly sessionBackend?: unknown;
+      };
+      expect(output).toMatchObject({
+        type: "final_result",
+        outputFormat: "json",
+        assistantText: "CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts.",
+        cwd: resolve(cwd),
+        model: "mock-model"
+      });
+      expect(output.snapshotPath).toBe(output.session.snapshotPath);
+      expect(output.session.sessionId.length).toBeGreaterThan(0);
+      expect(output.session.sessionDir).toBe(dirname(output.session.latestPath));
+      expect(output.session.sessionDir).toBe(dirname(output.session.snapshotPath));
+      expect(output.session.sessionDir).toBe(
+        dirname(output.session.transcriptPath)
+      );
+      expect(output.session.messageCount).toBeGreaterThanOrEqual(5);
+      expect(output.session.summary).toContain("Inspect the fixture project");
+      expect(output.messages).toBeUndefined();
+      expect(output.transcript).toBeUndefined();
+      expect(output.sessionBackend).toBeUndefined();
+      expect(output.session.messages).toBeUndefined();
+      expect(output.session.transcript).toBeUndefined();
+      expect(output.session.sessionBackend).toBeUndefined();
+
+      expect((await stat(output.session.snapshotPath)).isFile()).toBe(true);
+      expect((await stat(output.session.latestPath)).isFile()).toBe(true);
+      expect((await stat(output.session.transcriptPath)).isFile()).toBe(true);
+
+      const latest = JSON.parse(
+        await readFile(output.session.latestPath, "utf8")
+      ) as {
+        readonly sessionId: string;
+        readonly path: string;
+        readonly messageCount: number;
+        readonly summary: string;
+      };
+      expect(latest).toMatchObject({
+        sessionId: output.session.sessionId,
+        path: basename(output.session.snapshotPath),
+        messageCount: output.session.messageCount,
+        summary: output.session.summary
+      });
+
+      const snapshot = await readFile(output.session.snapshotPath, "utf8");
+      expect(snapshot).toContain(output.session.sessionId);
+      expect(snapshot).toContain("CLI_ACCEPTANCE_TARGET");
+
+      const transcript = await readFile(output.session.transcriptPath, "utf8");
+      expect(transcript).toContain(
+        "Inspect the fixture project and identify CLI_ACCEPTANCE_TARGET."
+      );
+      expect(transcript).toContain(
+        "CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts."
+      );
     } finally {
       removeTempRoot(root);
     }
