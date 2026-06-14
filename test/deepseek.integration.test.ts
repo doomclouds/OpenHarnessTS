@@ -1,4 +1,8 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runCli } from "../src/cli/index.js";
 import {
   createDeepSeekApiClientFromEnv,
   createToolResult,
@@ -11,6 +15,38 @@ import {
   type StreamEvent,
   type ToolDefinition
 } from "../src/index.js";
+
+interface CapturedIo {
+  readonly stdout: string[];
+  readonly stderr: string[];
+}
+
+function createCapturedIo(): CapturedIo & {
+  readonly io: {
+    readonly stdout: (text: string) => void;
+    readonly stderr: (text: string) => void;
+  };
+} {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  return {
+    stdout,
+    stderr,
+    io: {
+      stdout(text) {
+        stdout.push(text);
+      },
+      stderr(text) {
+        stderr.push(text);
+      }
+    }
+  };
+}
+
+async function createTempProject(prefix: string): Promise<string> {
+  return await mkdtemp(join(tmpdir(), prefix));
+}
 
 function requireDeepSeekApiKey(): string {
   const apiKey = process.env["DEEPSEEK_API_KEY"]?.trim();
@@ -144,6 +180,47 @@ describe("DeepSeek real API integration", () => {
       expect(
         getMessageText(getFinalAssistantTurnCompleteEvent(events).message)
       ).toContain("openharness-deepseek-ok");
+    }
+  );
+
+  it(
+    "wires a real DeepSeek provider through the CLI",
+    { timeout: 60_000 },
+    async () => {
+      requireDeepSeekApiKey();
+
+      const root = await createTempProject("openharness-cli-deepseek-");
+      const captured = createCapturedIo();
+
+      try {
+        const exitCode = await runCli(
+          [
+            "--cwd",
+            root,
+            "--print",
+            "Reply exactly: openharness-cli-deepseek-ok",
+            "--model",
+            getDeepSeekModel(),
+            "--max-turns",
+            "2",
+            "--permission-mode",
+            "default"
+          ],
+          captured.io,
+          {
+            version: "1.2.3",
+            env: process.env
+          }
+        );
+
+        expect(exitCode).toBe(0);
+        expect(captured.stderr).toEqual([]);
+        expect(captured.stdout.join("")).toContain(
+          "openharness-cli-deepseek-ok"
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   );
 

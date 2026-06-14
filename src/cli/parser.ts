@@ -1,5 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import type { PermissionMode } from "../permissions/index.js";
 
 export interface ParseCliArgsOptions {
   readonly cwd?: string;
@@ -10,7 +11,8 @@ export type CliParseErrorCode =
   | "missing_mode"
   | "missing_print_prompt"
   | "invalid_cwd"
-  | "unknown_option";
+  | "unknown_option"
+  | "invalid_option_value";
 
 export interface CliParseError {
   readonly code: CliParseErrorCode;
@@ -19,10 +21,20 @@ export interface CliParseError {
   readonly value?: string;
 }
 
+export interface CliPrintOptions {
+  readonly prompt: string;
+  readonly cwd: string;
+  readonly model?: string;
+  readonly apiKey?: string;
+  readonly baseURL?: string;
+  readonly maxTurns?: number;
+  readonly permissionMode?: PermissionMode;
+}
+
 export type CliParseResult =
   | { readonly type: "help" }
   | { readonly type: "version"; readonly version: string }
-  | { readonly type: "print"; readonly prompt: string; readonly cwd: string }
+  | { readonly type: "print"; readonly options: CliPrintOptions }
   | { readonly type: "error"; readonly error: CliParseError };
 
 function missingPrintPrompt(): CliParseResult {
@@ -71,6 +83,65 @@ function unknownOption(option: string): CliParseResult {
   };
 }
 
+function invalidOptionValue(
+  option: string,
+  value: string,
+  message: string
+): CliParseResult {
+  return {
+    type: "error",
+    error: {
+      code: "invalid_option_value",
+      option,
+      value,
+      message
+    }
+  };
+}
+
+function readNonEmptyOptionValue(
+  args: readonly string[],
+  index: number,
+  option: string
+): string | CliParseResult {
+  const value = args[index + 1];
+
+  if (value === undefined || value.startsWith("--") || value.trim().length === 0) {
+    return invalidOptionValue(option, "", `${option} requires a non-empty value.`);
+  }
+
+  return value.trim();
+}
+
+function parsePositiveIntegerOption(
+  value: string,
+  option: string
+): number | CliParseResult {
+  const parsed = Number(value);
+
+  if (!/^[1-9]\d*$/u.test(value) || !Number.isSafeInteger(parsed)) {
+    return invalidOptionValue(
+      option,
+      value,
+      `${option} requires a positive integer value.`
+    );
+  }
+
+  return parsed;
+}
+
+function parsePermissionMode(value: string): PermissionMode | CliParseResult {
+  if (value === "default" || value === "plan" || value === "full_auto") {
+    return value;
+  }
+
+  return invalidOptionValue(
+    "--permission-mode",
+    value,
+    "--permission-mode must be one of: default, plan, full_auto."
+  );
+}
+
 function isExistingDirectory(path: string): boolean {
   if (!existsSync(path)) {
     return false;
@@ -89,6 +160,11 @@ export function parseCliArgs(
 ): CliParseResult {
   let cwd = resolve(options.cwd ?? process.cwd());
   let printPrompt: string | undefined;
+  let model: string | undefined;
+  let apiKey: string | undefined;
+  let baseURL: string | undefined;
+  let maxTurns: number | undefined;
+  let permissionMode: PermissionMode | undefined;
 
   if (args.length === 0) {
     return {
@@ -150,11 +226,87 @@ export function parseCliArgs(
       continue;
     }
 
+    if (token === "--model") {
+      const value = readNonEmptyOptionValue(args, index, "--model");
+      if (typeof value !== "string") {
+        return value;
+      }
+
+      model = value;
+      index += 1;
+      continue;
+    }
+
+    if (token === "--api-key") {
+      const value = readNonEmptyOptionValue(args, index, "--api-key");
+      if (typeof value !== "string") {
+        return value;
+      }
+
+      apiKey = value;
+      index += 1;
+      continue;
+    }
+
+    if (token === "--base-url") {
+      const value = readNonEmptyOptionValue(args, index, "--base-url");
+      if (typeof value !== "string") {
+        return value;
+      }
+
+      baseURL = value;
+      index += 1;
+      continue;
+    }
+
+    if (token === "--max-turns") {
+      const value = readNonEmptyOptionValue(args, index, "--max-turns");
+      if (typeof value !== "string") {
+        return value;
+      }
+
+      const parsed = parsePositiveIntegerOption(value, "--max-turns");
+      if (typeof parsed !== "number") {
+        return parsed;
+      }
+
+      maxTurns = parsed;
+      index += 1;
+      continue;
+    }
+
+    if (token === "--permission-mode") {
+      const value = readNonEmptyOptionValue(args, index, "--permission-mode");
+      if (typeof value !== "string") {
+        return value;
+      }
+
+      const parsed = parsePermissionMode(value);
+      if (typeof parsed !== "string") {
+        return parsed;
+      }
+
+      permissionMode = parsed;
+      index += 1;
+      continue;
+    }
+
     return unknownOption(token);
   }
 
   if (printPrompt !== undefined) {
-    return { type: "print", prompt: printPrompt, cwd };
+    return {
+      type: "print",
+      options: {
+        prompt: printPrompt,
+        cwd,
+        ...(model === undefined ? {} : { model }),
+        ...(apiKey === undefined ? {} : { apiKey }),
+        ...(baseURL === undefined ? {} : { baseURL }),
+        ...(maxTurns === undefined ? {} : { maxTurns }),
+        ...(permissionMode === undefined ? {} : { permissionMode })
+      }
+    };
   }
 
   return {

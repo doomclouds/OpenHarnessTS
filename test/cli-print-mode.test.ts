@@ -324,6 +324,56 @@ describe("runPrintMode", () => {
     }
   });
 
+  it("forwards runtime limits and permission mode into project execution", async () => {
+    const root = await makeTempProject("openharness-print-runtime-flags-");
+    const cwd = join(root, "fixture-project");
+    const runtimePaths = createIsolatedRuntimePaths(root);
+
+    try {
+      await mkdir(join(cwd, "src"), { recursive: true });
+      await writeFile(
+        join(cwd, "src", "target.ts"),
+        "export const PRINT_TARGET = \"cli print mode\";\n",
+        "utf8"
+      );
+
+      const client = new ScriptedApiClient([
+        [
+          assistantToolUse({
+            id: "toolu_grep",
+            name: "grep",
+            input: {
+              pattern: "PRINT_TARGET",
+              glob: "src/**/*.ts",
+              headLimit: 10
+            }
+          })
+        ]
+      ]);
+
+      await expect(
+        runPrintMode({
+          prompt: "Find PRINT_TARGET.",
+          cwd,
+          homeDir: runtimePaths.homeDir,
+          env: runtimePaths.env,
+          apiClient: client,
+          model: "mock-model",
+          sessionId: "print_runtime_flags",
+          maxTurns: 1,
+          permissionMode: "plan"
+        })
+      ).rejects.toMatchObject({
+        message: "Max turns exceeded: 1"
+      });
+
+      expect(client.requests).toHaveLength(1);
+      expect(client.requests[0]?.systemPrompt).toContain("- Current mode: plan");
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
   it("fails when the provider throws", async () => {
     const root = await makeTempProject("openharness-print-provider-error-");
 
@@ -401,7 +451,7 @@ describe("CLI print-mode integration", () => {
     }
   });
 
-  it("returns a provider-not-configured error without injected print-mode provider", async () => {
+  it("returns a missing API key error without injected print-mode provider", async () => {
     const root = await makeTempProject("openharness-cli-print-missing-provider-");
     const captured = createCapturedIo();
 
@@ -409,13 +459,13 @@ describe("CLI print-mode integration", () => {
       const exitCode = await runCli(
         ["--cwd", root, "--print", "Hello."],
         captured.io,
-        { version: "1.2.3" }
+        { version: "1.2.3", env: {} }
       );
 
       expect(exitCode).toBe(1);
       expect(captured.stdout).toEqual([]);
       expect(captured.stderr).toEqual([
-        "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
+        "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.\n"
       ]);
     } finally {
       await removeTempProject(root);
