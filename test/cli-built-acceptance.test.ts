@@ -164,6 +164,11 @@ interface BuiltPrintEnvelope {
   readonly stderr: string;
   readonly requests: readonly unknown[];
   readonly toolNames: readonly string[];
+  readonly toolResultsSeen: readonly {
+    readonly toolUseId: string;
+    readonly content: string;
+    readonly isError?: boolean;
+  }[];
 }
 
 function getBuiltCliModuleUrl(): string {
@@ -205,6 +210,7 @@ function assistantToolUse(id, name, input) {
 
 const requests = [];
 const toolNames = [];
+const toolResultsSeen = [];
 const turns = [
   [
     assistantToolUse("toolu_glob", "glob", {
@@ -230,6 +236,25 @@ const turns = [
 
 const apiClient = {
   async *streamMessage(request) {
+    for (const message of request.messages) {
+      const content = message.content;
+      if (!Array.isArray(content)) {
+        continue;
+      }
+      for (const block of content) {
+        if (block.type !== "tool_result") {
+          continue;
+        }
+        toolResultsSeen.push({
+          toolUseId: block.toolUseId,
+          content:
+            typeof block.content === "string"
+              ? block.content
+              : JSON.stringify(block.content),
+          ...(block.isError === undefined ? {} : { isError: block.isError })
+        });
+      }
+    }
     requests.push({
       ...request,
       messages: [...request.messages],
@@ -289,7 +314,8 @@ process.stdout.write(
     stdout: stdout.join(""),
     stderr: stderr.join(""),
     requests,
-    toolNames
+    toolNames,
+    toolResultsSeen
   })
 );
 `;
@@ -538,6 +564,25 @@ describe("built CLI fixture print acceptance", () => {
       expect(envelope.stderr).toBe("");
       expect(envelope.requests).toHaveLength(4);
       expect(envelope.toolNames).toEqual(["glob", "grep", "read_file"]);
+      expect(envelope.toolResultsSeen.length).toBeGreaterThanOrEqual(3);
+      const globResult = envelope.toolResultsSeen.find(
+        (result) => result.toolUseId === "toolu_glob"
+      );
+      const grepResult = envelope.toolResultsSeen.find(
+        (result) => result.toolUseId === "toolu_grep"
+      );
+      const readFileResult = envelope.toolResultsSeen.find(
+        (result) => result.toolUseId === "toolu_read"
+      );
+      expect(globResult).toBeDefined();
+      expect(globResult?.isError).not.toBe(true);
+      expect(globResult?.content).toContain("src/alpha.ts");
+      expect(grepResult).toBeDefined();
+      expect(grepResult?.isError).not.toBe(true);
+      expect(grepResult?.content).toContain("CLI_ACCEPTANCE_TARGET");
+      expect(readFileResult).toBeDefined();
+      expect(readFileResult?.isError).not.toBe(true);
+      expect(readFileResult?.content).toContain("built cli acceptance");
 
       const output = JSON.parse(envelope.stdout) as {
         readonly type: string;
