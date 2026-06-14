@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CliProviderError,
   MISSING_DEEPSEEK_API_KEY_MESSAGE,
   createCliPrintProvider
 } from "../src/cli/index.js";
@@ -82,6 +83,7 @@ describe("createCliPrintProvider", () => {
     expect(provider.apiClient.baseURL).toBe("https://env.example.com");
     expect(provider.permissionMode).toBe("default");
     expect(provider.maxTurns).toBeUndefined();
+    expect(Object.hasOwn(provider, "maxTurns")).toBe(false);
     expect(provider.redact("env-key leaked")).toBe("[REDACTED] leaked");
     expect(sdkOptions).toEqual([
       {
@@ -141,9 +143,32 @@ describe("createCliPrintProvider", () => {
     expect(sdkOptions).toEqual([]);
   });
 
-  it("does not redact text when no key was provided", () => {
-    const redacted = createCliPrintProvider.redactApiKey(undefined, "safe text");
+  it("redacts the resolved key from provider construction failures", () => {
+    expect.assertions(4);
 
-    expect(redacted).toBe("safe text");
+    try {
+      createCliPrintProvider({
+        flags: {
+          apiKey: "flag-secret"
+        },
+        env: {
+          DEEPSEEK_API_KEY: "env-secret"
+        },
+        createSdkClient() {
+          throw new Error(
+            "failed with flag-secret while env-secret was also configured"
+          );
+        }
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(CliProviderError);
+      expect((error as CliProviderError).message).toContain("[REDACTED]");
+      expect((error as CliProviderError).message).not.toContain("flag-secret");
+      expect((error as CliProviderError).message).toContain("env-secret");
+    }
+  });
+
+  it("does not expose test-only redaction helpers", () => {
+    expect(Object.hasOwn(createCliPrintProvider, "redactApiKey")).toBe(false);
   });
 });

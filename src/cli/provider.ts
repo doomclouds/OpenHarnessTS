@@ -82,10 +82,6 @@ export function createCliPrintProvider(
   };
 }
 
-export namespace createCliPrintProvider {
-  export const redactApiKey = redactApiKeyForTests;
-}
-
 function firstNonEmpty(
   first: string | undefined,
   second: string | undefined
@@ -112,13 +108,6 @@ function redactWithKey(key: string | undefined, text: string): string {
   }
 
   return text.replaceAll(key, "[REDACTED]");
-}
-
-function redactApiKeyForTests(
-  key: string | undefined,
-  text: string
-): string {
-  return redactWithKey(key, text);
 }
 
 function getErrorMessage(error: unknown): string {
