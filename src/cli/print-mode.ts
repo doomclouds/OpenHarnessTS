@@ -1,0 +1,154 @@
+import type { ApiClient } from "../api/index.js";
+import { getMessageText } from "../messages/index.js";
+import { buildProjectRuntime } from "../project-runtime/index.js";
+import type {
+  SessionBackend,
+  SessionSnapshot,
+  SessionStorageOptions
+} from "../sessions/index.js";
+import type {
+  AssistantTurnCompleteEvent,
+  StreamEvent,
+  UsageSnapshot
+} from "../stream-events/index.js";
+
+export class PrintModeError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "PrintModeError";
+  }
+}
+
+export interface PrintModeProviderOptions {
+  readonly apiClient: ApiClient;
+  readonly model: string;
+  readonly maxTokens?: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RunPrintModeOptions
+  extends PrintModeProviderOptions,
+    SessionStorageOptions {
+  readonly prompt: string;
+  readonly cwd?: string | URL;
+  readonly sessionId?: string;
+  readonly sessionBackend?: SessionBackend;
+}
+
+export interface PrintModeResult {
+  readonly assistantText: string;
+  readonly sessionId: string;
+  readonly cwd: string;
+  readonly model: string;
+  readonly snapshotPath: string;
+  readonly events: readonly StreamEvent[];
+  readonly sessionBackend: SessionBackend;
+}
+
+export async function runPrintMode(
+  options: RunPrintModeOptions
+): Promise<PrintModeResult> {
+  const runtime = buildProjectRuntime({
+    apiClient: options.apiClient,
+    model: options.model,
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
+    ...(options.sessionBackend === undefined
+      ? {}
+      : { sessionBackend: options.sessionBackend }),
+    ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
+    ...(options.env === undefined ? {} : { env: options.env }),
+    ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+    ...(options.signal === undefined ? {} : { signal: options.signal })
+  });
+  const events: StreamEvent[] = [];
+  const textDeltas: string[] = [];
+  let finalAssistantEvent: AssistantTurnCompleteEvent | undefined;
+  let usage: UsageSnapshot | undefined;
+
+  for await (const event of runtime.engine.submitMessage(options.prompt)) {
+    events.push(event);
+
+    switch (event.type) {
+      case "assistant_text_delta":
+        textDeltas.push(event.text);
+        break;
+      case "assistant_turn_complete":
+        finalAssistantEvent = event;
+        if (event.usage !== undefined) {
+          usage = event.usage;
+        }
+        break;
+      case "error":
+        if (!event.recoverable) {
+          throw new PrintModeError(event.message);
+        }
+        break;
+      case "status":
+      case "tool_execution_started":
+      case "tool_execution_completed":
+        break;
+      default:
+        assertNever(event);
+    }
+  }
+
+  const assistantText =
+    textDeltas.length > 0
+      ? textDeltas.join("")
+      : getFinalAssistantText(finalAssistantEvent);
+  const snapshot = await savePrintModeSnapshot(runtime, options, usage);
+
+  return {
+    assistantText,
+    sessionId: runtime.sessionId,
+    cwd: runtime.cwd,
+    model: runtime.engine.getModel(),
+    snapshotPath: snapshot.path,
+    events,
+    sessionBackend: runtime.sessionBackend
+  };
+}
+
+function getFinalAssistantText(
+  event: AssistantTurnCompleteEvent | undefined
+): string {
+  if (event === undefined) {
+    return "";
+  }
+
+  return getMessageText(event.message);
+}
+
+async function savePrintModeSnapshot(
+  runtime: ReturnType<typeof buildProjectRuntime>,
+  options: RunPrintModeOptions,
+  usage: UsageSnapshot | undefined
+): Promise<SessionSnapshot> {
+  try {
+    return await runtime.sessionBackend.saveSnapshot({
+      cwd: runtime.cwd,
+      sessionId: runtime.sessionId,
+      model: runtime.engine.getModel(),
+      systemPrompt: runtime.engine.getSystemPrompt(),
+      messages: runtime.engine.getMessages(),
+      toolMetadata: runtime.engine.getToolMetadata(),
+      ...(usage === undefined ? {} : { usage }),
+      ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.now === undefined ? {} : { now: options.now })
+    });
+  } catch (error) {
+    throw new PrintModeError(
+      `Session snapshot save failed: ${getErrorMessage(error)}`
+    );
+  }
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled print-mode event: ${String(value)}`);
+}
