@@ -414,8 +414,9 @@ describe("CLI print-mode integration", () => {
 
       expect(exitCode).toBe(1);
       expect(captured.stdout).toEqual([]);
-      expect(captured.stderr).toHaveLength(1);
-      expect(captured.stderr[0]).toContain("requires a configured provider");
+      expect(captured.stderr).toEqual([
+        "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
+      ]);
     } finally {
       await removeTempProject(root);
     }

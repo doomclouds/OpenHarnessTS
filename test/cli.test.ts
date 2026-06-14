@@ -253,7 +253,9 @@ describe("CLI runner", () => {
 
     await expect(runCli(["--print", "hello"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
-    expect(captured.stderr.join("")).toContain("requires a configured provider");
+    expect(captured.stderr).toEqual([
+      "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
+    ]);
   });
 
   it("writes parser errors to stderr only", async () => {

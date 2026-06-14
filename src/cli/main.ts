@@ -83,7 +83,7 @@ export async function runCli(
 
   if (options.printMode === undefined) {
     io.stderr(
-      "--print requires a configured provider. DeepSeek CLI flags arrive in the Provider Env And Flags slice.\n"
+      "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
     );
     return 1;
   }
