@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-  MISSING_DEEPSEEK_API_KEY_MESSAGE,
-  createCliPrintProvider
-} from "../src/cli/index.js";
+import { createCliPrintProvider } from "../src/cli/index.js";
 import {
   DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_DEEPSEEK_MODEL,
   type DeepSeekSdkClient,
   type DeepSeekSdkOptions
 } from "../src/index.js";
+
+const MISSING_DEEPSEEK_API_KEY_MESSAGE =
+  "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.";
 
 function emptyFakeSdkClient(): DeepSeekSdkClient {
   return {
