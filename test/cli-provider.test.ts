@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   CliProviderError,
   MISSING_DEEPSEEK_API_KEY_MESSAGE,
-  createCliPrintProvider
+  createCliPrintProvider,
+  resolveCliProviderPreview
 } from "../src/cli/index.js";
 import {
   DEFAULT_DEEPSEEK_BASE_URL,
@@ -170,5 +171,85 @@ describe("createCliPrintProvider", () => {
 
   it("does not expose test-only redaction helpers", () => {
     expect(Object.hasOwn(createCliPrintProvider, "redactApiKey")).toBe(false);
+  });
+});
+
+describe("resolveCliProviderPreview", () => {
+  it("reports flag sources without creating an SDK client", () => {
+    const preview = resolveCliProviderPreview({
+      flags: {
+        apiKey: "flag-key",
+        baseURL: "https://flag.example.com///",
+        model: "flag-model"
+      },
+      env: {
+        DEEPSEEK_API_KEY: "env-key",
+        DEEPSEEK_BASE_URL: "https://env.example.com",
+        DEEPSEEK_MODEL: "env-model"
+      }
+    });
+
+    expect(preview).toEqual({
+      provider: "deepseek",
+      apiFormat: "openai-compatible",
+      model: "flag-model",
+      modelSource: "flag",
+      baseURL: "https://flag.example.com",
+      baseURLSource: "flag",
+      apiKeySource: "flag",
+      authStatus: "configured",
+      apiClientValidation: {
+        status: "ok",
+        detail: ""
+      }
+    });
+    expect(JSON.stringify(preview)).not.toContain("flag-key");
+    expect(JSON.stringify(preview)).not.toContain("env-key");
+  });
+
+  it("reports environment sources", () => {
+    const preview = resolveCliProviderPreview({
+      flags: {},
+      env: {
+        DEEPSEEK_API_KEY: "env-key",
+        DEEPSEEK_BASE_URL: "https://env.example.com///",
+        DEEPSEEK_MODEL: "env-model"
+      }
+    });
+
+    expect(preview).toEqual({
+      provider: "deepseek",
+      apiFormat: "openai-compatible",
+      model: "env-model",
+      modelSource: "env",
+      baseURL: "https://env.example.com",
+      baseURLSource: "env",
+      apiKeySource: "env",
+      authStatus: "configured",
+      apiClientValidation: { status: "ok", detail: "" }
+    });
+    expect(JSON.stringify(preview)).not.toContain("env-key");
+  });
+
+  it("reports defaults and missing auth without exposing keys", () => {
+    const preview = resolveCliProviderPreview({
+      flags: {},
+      env: {}
+    });
+
+    expect(preview).toEqual({
+      provider: "deepseek",
+      apiFormat: "openai-compatible",
+      model: DEFAULT_DEEPSEEK_MODEL,
+      modelSource: "default",
+      baseURL: DEFAULT_DEEPSEEK_BASE_URL,
+      baseURLSource: "default",
+      apiKeySource: "missing",
+      authStatus: "missing",
+      apiClientValidation: {
+        status: "error",
+        detail: MISSING_DEEPSEEK_API_KEY_MESSAGE
+      }
+    });
   });
 });

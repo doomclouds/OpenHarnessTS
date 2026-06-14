@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DeepSeekSdkClient, DeepSeekSdkOptions } from "../api/index.js";
-import { renderCliErrorOutput, renderCliOutput } from "./output.js";
+import { buildCliDryRunPreview } from "./dry-run.js";
+import {
+  renderCliDryRunPreview,
+  renderCliErrorOutput,
+  renderCliOutput
+} from "./output.js";
 import { parseCliArgs, type CliPrintOptions } from "./parser.js";
 import {
   PrintModeError,
@@ -59,6 +64,7 @@ export function renderHelp(): string {
     "",
     "Options:",
     "  --cwd <dir>    Run from an existing working directory.",
+    "  --dry-run      Preview resolved runtime setup without executing.",
     "  --output-format <format>",
     "                 Render print output as text, json, or stream-json.",
     "  --help         Show help.",
@@ -92,6 +98,50 @@ export async function runCli(
   if (result.type === "error") {
     io.stderr(`${result.error.message}\n`);
     return 1;
+  }
+
+  if (result.type === "dry_run") {
+    try {
+      const preview = buildCliDryRunPreview({
+        ...(result.options.prompt === undefined
+          ? {}
+          : { prompt: result.options.prompt }),
+        cwd: result.options.cwd,
+        outputFormat: result.options.outputFormat,
+        ...(result.options.model === undefined
+          ? {}
+          : { model: result.options.model }),
+        ...(result.options.apiKey === undefined
+          ? {}
+          : { apiKey: result.options.apiKey }),
+        ...(result.options.baseURL === undefined
+          ? {}
+          : { baseURL: result.options.baseURL }),
+        ...(result.options.maxTurns === undefined
+          ? {}
+          : { maxTurns: result.options.maxTurns }),
+        ...(result.options.permissionMode === undefined
+          ? {}
+          : { permissionMode: result.options.permissionMode }),
+        ...(options.env === undefined ? {} : { env: options.env })
+      });
+
+      io.stdout(
+        renderCliDryRunPreview({
+          preview,
+          format: result.options.outputFormat
+        })
+      );
+      return 0;
+    } catch (error) {
+      io.stderr(
+        renderCliErrorOutput({
+          format: result.options.outputFormat,
+          message: getPrintModeErrorMessage(error)
+        })
+      );
+      return 1;
+    }
   }
 
   let provider: CliPrintProvider | undefined;

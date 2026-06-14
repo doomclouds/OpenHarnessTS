@@ -1,6 +1,7 @@
 import {
   DeepSeekApiClient,
   DEFAULT_DEEPSEEK_MODEL,
+  normalizeDeepSeekBaseURL,
   type DeepSeekSdkClient,
   type DeepSeekSdkOptions
 } from "../api/index.js";
@@ -29,6 +30,23 @@ export interface CliPrintProvider {
   readonly maxTurns?: number;
   readonly permissionMode: PermissionMode;
   readonly redact: (text: string) => string;
+}
+
+export type CliProviderValueSource = "flag" | "env" | "default";
+
+export interface CliProviderPreview {
+  readonly provider: "deepseek";
+  readonly apiFormat: "openai-compatible";
+  readonly model: string;
+  readonly modelSource: CliProviderValueSource;
+  readonly baseURL: string;
+  readonly baseURLSource: CliProviderValueSource;
+  readonly apiKeySource: "flag" | "env" | "missing";
+  readonly authStatus: "configured" | "missing";
+  readonly apiClientValidation: {
+    readonly status: "ok" | "error";
+    readonly detail: string;
+  };
 }
 
 export class CliProviderError extends Error {
@@ -82,6 +100,45 @@ export function createCliPrintProvider(
   };
 }
 
+export function resolveCliProviderPreview(
+  options: CreateCliPrintProviderOptions
+): CliProviderPreview {
+  const env = options.env ?? process.env;
+  const model = resolveProviderValue(
+    options.flags.model,
+    env["DEEPSEEK_MODEL"],
+    DEFAULT_DEEPSEEK_MODEL
+  );
+  const baseURL = resolveProviderValue(
+    options.flags.baseURL,
+    env["DEEPSEEK_BASE_URL"],
+    undefined
+  );
+  const apiKeySource = resolveApiKeySource(
+    options.flags.apiKey,
+    env["DEEPSEEK_API_KEY"]
+  );
+  const authStatus = apiKeySource === "missing" ? "missing" : "configured";
+
+  return {
+    provider: "deepseek",
+    apiFormat: "openai-compatible",
+    model: model.value ?? DEFAULT_DEEPSEEK_MODEL,
+    modelSource: model.source,
+    baseURL: normalizeDeepSeekBaseURL(baseURL.value),
+    baseURLSource: baseURL.source,
+    apiKeySource,
+    authStatus,
+    apiClientValidation:
+      authStatus === "configured"
+        ? { status: "ok", detail: "" }
+        : {
+            status: "error",
+            detail: MISSING_DEEPSEEK_API_KEY_MESSAGE
+          }
+  };
+}
+
 function firstNonEmpty(
   first: string | undefined,
   second: string | undefined
@@ -100,6 +157,42 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return normalized === undefined || normalized.length === 0
     ? undefined
     : normalized;
+}
+
+function resolveProviderValue(
+  flagValue: string | undefined,
+  envValue: string | undefined,
+  defaultValue: string | undefined
+): {
+  readonly value: string | undefined;
+  readonly source: CliProviderValueSource;
+} {
+  const normalizedFlagValue = normalizeOptionalString(flagValue);
+  if (normalizedFlagValue !== undefined) {
+    return { value: normalizedFlagValue, source: "flag" };
+  }
+
+  const normalizedEnvValue = normalizeOptionalString(envValue);
+  if (normalizedEnvValue !== undefined) {
+    return { value: normalizedEnvValue, source: "env" };
+  }
+
+  return { value: defaultValue, source: "default" };
+}
+
+function resolveApiKeySource(
+  flagValue: string | undefined,
+  envValue: string | undefined
+): "flag" | "env" | "missing" {
+  if (normalizeOptionalString(flagValue) !== undefined) {
+    return "flag";
+  }
+
+  if (normalizeOptionalString(envValue) !== undefined) {
+    return "env";
+  }
+
+  return "missing";
 }
 
 function redactWithKey(key: string | undefined, text: string): string {

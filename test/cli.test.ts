@@ -186,6 +186,54 @@ describe("CLI parser", () => {
     });
   });
 
+  it("parses bare dry-run with the resolved default cwd", () => {
+    const cwd = process.cwd();
+
+    expect(parseCliArgs(["--dry-run"], { cwd, version: "1.2.3" })).toEqual({
+      type: "dry_run",
+      options: {
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
+  it("parses dry-run print prompts", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--dry-run", "--print", "hello"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "dry_run",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
+  it("parses dry-run after the print prompt", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--print", "hello", "--dry-run"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "dry_run",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
   it("defaults print output format to text", () => {
     const cwd = process.cwd();
 
@@ -228,6 +276,64 @@ describe("CLI parser", () => {
     ).toMatchObject({
       type: "print",
       options: { outputFormat: "stream-json" }
+    });
+  });
+
+  it("parses dry-run with provider, runtime, cwd, and output flags", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(
+        [
+          "--cwd",
+          cwd,
+          "--dry-run",
+          "--print",
+          "hello",
+          "--model",
+          "deepseek-test",
+          "--api-key",
+          "flag-key",
+          "--base-url",
+          "https://deepseek.example.com///",
+          "--max-turns",
+          "3",
+          "--permission-mode",
+          "full_auto",
+          "--output-format",
+          "json"
+        ],
+        { version: "1.2.3" }
+      )
+    ).toEqual({
+      type: "dry_run",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        model: "deepseek-test",
+        apiKey: "flag-key",
+        baseURL: "https://deepseek.example.com///",
+        maxTurns: 3,
+        permissionMode: "full_auto",
+        outputFormat: "json"
+      }
+    });
+  });
+
+  it("parses dry-run stream-json output", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--dry-run", "--output-format", "stream-json"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "dry_run",
+      options: {
+        cwd: resolve(cwd),
+        outputFormat: "stream-json"
+      }
     });
   });
 
@@ -309,6 +415,30 @@ describe("CLI parser", () => {
         prompt: "hello",
         cwd: resolve(cwd),
         permissionMode: "full_auto"
+      }
+    });
+  });
+
+  it("rejects missing dry-run print prompt", () => {
+    expect(parseCliArgs(["--dry-run", "--print"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "missing_print_prompt",
+        option: "--print",
+        message: "--print requires a non-empty prompt value."
+      }
+    });
+  });
+
+  it("rejects empty dry-run print prompt", () => {
+    expect(
+      parseCliArgs(["--dry-run", "--print", "   "], { version: "1.2.3" })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "missing_print_prompt",
+        option: "--print",
+        message: "--print requires a non-empty prompt value."
       }
     });
   });
@@ -871,6 +1001,162 @@ describe("CLI runner", () => {
     }
 
     expect(sdkOptions).toEqual([]);
+  });
+
+  it("runs bare dry-run without creating a provider", async () => {
+    const root = createTempDir("openharness-cli-dry-run-bare-");
+    const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+
+    try {
+      const exitCode = await runCli(["--cwd", root, "--dry-run"], captured.io, {
+        version: "1.2.3",
+        env: createIsolatedCliEnv(root),
+        createSdkClient(options) {
+          sdkOptions.push(options);
+          return createFakeSdkClient([[textDeltaChunk("unused")]]).client;
+        }
+      });
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      expect(captured.stdout.join("")).toContain("OpenHarness Dry Run");
+      expect(captured.stdout.join("")).toContain("interactive_session");
+      expect(sdkOptions).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns blocked dry-run readiness without failing the process", async () => {
+    const root = createTempDir("openharness-cli-dry-run-blocked-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--dry-run", "--print", "hello"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root)
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      expect(captured.stdout.join("")).toContain("- level: blocked");
+      expect(captured.stdout.join("")).toContain("DEEPSEEK_API_KEY");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes dry-run json output", async () => {
+    const root = createTempDir("openharness-cli-dry-run-json-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--dry-run",
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-key",
+          "--output-format",
+          "json"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root)
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      const parsed = JSON.parse(captured.stdout.join("")) as {
+        readonly type: string;
+        readonly mode: string;
+        readonly entrypoint: { readonly kind: string };
+        readonly readiness: { readonly level: string };
+      };
+      expect(parsed).toMatchObject({
+        type: "dry_run_preview",
+        mode: "dry-run",
+        entrypoint: { kind: "model_prompt" },
+        readiness: { level: "ready" }
+      });
+      expect(captured.stdout.join("")).not.toContain("flag-key");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes dry-run stream-json output as one json line", async () => {
+    const root = createTempDir("openharness-cli-dry-run-stream-json-");
+    const captured = createCapturedIo();
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--dry-run", "--output-format", "stream-json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root)
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stderr).toEqual([]);
+      const lines = captured.stdout.join("").trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+        type: "dry_run_preview",
+        mode: "dry-run"
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not call injected print-mode during dry-run", async () => {
+    const root = createTempDir("openharness-cli-dry-run-no-print-mode-");
+    const captured = createCapturedIo();
+    let printModeCalled = false;
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--dry-run", "--print", "hello"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          printMode: {
+            apiClient: {
+              async *streamMessage() {
+                printModeCalled = true;
+                yield {
+                  type: "message_complete",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "unused" }]
+                  }
+                };
+              }
+            },
+            model: "mock-model"
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(printModeCalled).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("redacts the resolved API key from direct print-mode runtime errors", async () => {

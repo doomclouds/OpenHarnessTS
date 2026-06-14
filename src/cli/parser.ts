@@ -34,10 +34,22 @@ export interface CliPrintOptions {
   readonly permissionMode?: PermissionMode;
 }
 
+export interface CliDryRunOptions {
+  readonly prompt?: string;
+  readonly cwd: string;
+  readonly outputFormat: CliOutputFormat;
+  readonly model?: string;
+  readonly apiKey?: string;
+  readonly baseURL?: string;
+  readonly maxTurns?: number;
+  readonly permissionMode?: PermissionMode;
+}
+
 export type CliParseResult =
   | { readonly type: "help" }
   | { readonly type: "version"; readonly version: string }
   | { readonly type: "print"; readonly options: CliPrintOptions }
+  | { readonly type: "dry_run"; readonly options: CliDryRunOptions }
   | { readonly type: "error"; readonly error: CliParseError };
 
 function missingPrintPrompt(): CliParseResult {
@@ -181,6 +193,7 @@ export function parseCliArgs(
   let maxTurns: number | undefined;
   let permissionMode: PermissionMode | undefined;
   let outputFormat: CliOutputFormat = "text";
+  let dryRun = false;
 
   if (args.length === 0) {
     return {
@@ -323,7 +336,28 @@ export function parseCliArgs(
       continue;
     }
 
+    if (token === "--dry-run") {
+      dryRun = true;
+      continue;
+    }
+
     return unknownOption(token);
+  }
+
+  if (dryRun) {
+    return {
+      type: "dry_run",
+      options: {
+        ...(printPrompt === undefined ? {} : { prompt: printPrompt }),
+        cwd,
+        outputFormat,
+        ...(model === undefined ? {} : { model }),
+        ...(apiKey === undefined ? {} : { apiKey }),
+        ...(baseURL === undefined ? {} : { baseURL }),
+        ...(maxTurns === undefined ? {} : { maxTurns }),
+        ...(permissionMode === undefined ? {} : { permissionMode })
+      }
+    };
   }
 
   if (printPrompt !== undefined) {
