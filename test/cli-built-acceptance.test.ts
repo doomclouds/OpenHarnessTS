@@ -163,6 +163,7 @@ interface BuiltPrintEnvelope {
   readonly stdout: string;
   readonly stderr: string;
   readonly requests: readonly unknown[];
+  readonly toolNames: readonly string[];
 }
 
 function getBuiltCliModuleUrl(): string {
@@ -203,22 +204,25 @@ function assistantToolUse(id, name, input) {
 }
 
 const requests = [];
+const toolNames = [];
 const turns = [
+  [
+    assistantToolUse("toolu_glob", "glob", {
+      pattern: "src/**/*.ts",
+      limit: 10
+    })
+  ],
   [
     assistantToolUse("toolu_grep", "grep", {
       pattern: "CLI_ACCEPTANCE_TARGET",
-      glob: "**/*",
-      headLimit: 20
+      glob: "src/**/*.ts",
+      headLimit: 10
     })
   ],
   [
-    assistantToolUse("toolu_read_alpha", "read_file", {
-      path: "src/alpha.ts"
-    })
-  ],
-  [
-    assistantToolUse("toolu_read_agents", "read_file", {
-      path: "AGENTS.md"
+    assistantToolUse("toolu_read", "read_file", {
+      path: "src/alpha.ts",
+      limit: 20
     })
   ],
   [messageComplete("CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts.")]
@@ -236,6 +240,13 @@ const apiClient = {
       throw new Error(\`No scripted turn \${requests.length}.\`);
     }
     for (const event of turn) {
+      const content = event.message?.content;
+      const toolUse = Array.isArray(content)
+        ? content.find((block) => block.type === "tool_use")
+        : undefined;
+      if (toolUse?.name !== undefined) {
+        toolNames.push(toolUse.name);
+      }
       yield event;
     }
   }
@@ -277,7 +288,8 @@ process.stdout.write(
     exitCode,
     stdout: stdout.join(""),
     stderr: stderr.join(""),
-    requests
+    requests,
+    toolNames
   })
 );
 `;
@@ -525,6 +537,7 @@ describe("built CLI fixture print acceptance", () => {
       expect(envelope.exitCode).toBe(0);
       expect(envelope.stderr).toBe("");
       expect(envelope.requests).toHaveLength(4);
+      expect(envelope.toolNames).toEqual(["glob", "grep", "read_file"]);
 
       const output = JSON.parse(envelope.stdout) as {
         readonly type: string;
