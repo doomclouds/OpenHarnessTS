@@ -220,48 +220,48 @@ describe("CLI parser", () => {
 });
 
 describe("CLI runner", () => {
-  it("writes help to stdout and returns success", () => {
+  it("writes help to stdout and returns success", async () => {
     const captured = createCapturedIo();
 
-    expect(runCli(["--help"], captured.io, { version: "1.2.3" })).toBe(0);
+    await expect(runCli(["--help"], captured.io, { version: "1.2.3" })).resolves.toBe(0);
     expect(captured.stdout.join("")).toContain("OpenHarness");
     expect(captured.stdout.join("")).toContain("openharness --print <prompt>");
     expect(captured.stdout.join("")).toContain(
-      "print execution is not implemented yet"
+      "print mode only when a provider is configured"
     );
     expect(captured.stderr).toEqual([]);
   });
 
-  it("writes version to stdout and returns success", () => {
+  it("writes version to stdout and returns success", async () => {
     const captured = createCapturedIo();
 
-    expect(runCli(["--version"], captured.io, { version: "1.2.3" })).toBe(0);
+    await expect(runCli(["--version"], captured.io, { version: "1.2.3" })).resolves.toBe(0);
     expect(captured.stdout).toEqual(["OpenHarness 1.2.3\n"]);
     expect(captured.stderr).toEqual([]);
   });
 
-  it("writes bare invocation errors to stderr only", () => {
+  it("writes bare invocation errors to stderr only", async () => {
     const captured = createCapturedIo();
 
-    expect(runCli([], captured.io, { version: "1.2.3" })).toBe(1);
+    await expect(runCli([], captured.io, { version: "1.2.3" })).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
     expect(captured.stderr.join("")).toContain("No command mode selected");
   });
 
-  it("writes valid print not-connected errors to stderr only", () => {
+  it("writes unconfigured print provider errors to stderr only", async () => {
     const captured = createCapturedIo();
 
-    expect(runCli(["--print", "hello"], captured.io, { version: "1.2.3" })).toBe(1);
+    await expect(runCli(["--print", "hello"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
     expect(captured.stderr).toEqual([
-      "--print is parsed, but print-mode execution is not implemented yet.\n"
+      "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
     ]);
   });
 
-  it("writes parser errors to stderr only", () => {
+  it("writes parser errors to stderr only", async () => {
     const captured = createCapturedIo();
 
-    expect(runCli(["--model", "deepseek-chat"], captured.io, { version: "1.2.3" })).toBe(1);
+    await expect(runCli(["--model", "deepseek-chat"], captured.io, { version: "1.2.3" })).resolves.toBe(1);
     expect(captured.stdout).toEqual([]);
     expect(captured.stderr).toEqual(["Unknown option: --model\n"]);
   });

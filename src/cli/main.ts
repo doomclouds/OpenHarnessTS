@@ -3,6 +3,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseCliArgs } from "./parser.js";
+import {
+  PrintModeError,
+  runPrintMode,
+  type PrintModeProviderOptions
+} from "./print-mode.js";
 
 export interface CliIo {
   readonly stdout: (text: string) => void;
@@ -12,6 +17,7 @@ export interface CliIo {
 export interface RunCliOptions {
   readonly cwd?: string;
   readonly version?: string;
+  readonly printMode?: PrintModeProviderOptions;
 }
 
 const defaultIo: CliIo = {
@@ -45,16 +51,16 @@ export function renderHelp(): string {
     "  --help         Show help.",
     "  --version      Show version.",
     "",
-    "This alpha CLI only has a skeleton entry; print execution is not implemented yet.",
+    "This alpha CLI can run print mode only when a provider is configured.",
     ""
   ].join("\n");
 }
 
-export function runCli(
+export async function runCli(
   argv: readonly string[],
   io: CliIo = defaultIo,
   options: RunCliOptions = {}
-): number {
+): Promise<number> {
   const version = options.version ?? readPackageVersion();
   const parseOptions =
     options.cwd === undefined ? { version } : { cwd: options.cwd, version };
@@ -75,8 +81,33 @@ export function runCli(
     return 1;
   }
 
-  io.stderr("--print is parsed, but print-mode execution is not implemented yet.\n");
-  return 1;
+  if (options.printMode === undefined) {
+    io.stderr(
+      "--print requires provider configuration. Provider CLI setup is not available in this build.\n"
+    );
+    return 1;
+  }
+
+  try {
+    const printResult = await runPrintMode({
+      prompt: result.prompt,
+      cwd: result.cwd,
+      ...options.printMode
+    });
+    io.stdout(`${printResult.assistantText}\n`);
+    return 0;
+  } catch (error) {
+    io.stderr(`${getPrintModeErrorMessage(error)}\n`);
+    return 1;
+  }
+}
+
+function getPrintModeErrorMessage(error: unknown): string {
+  if (error instanceof PrintModeError || error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }
 
 const entrypoint = process.argv[1];
@@ -85,5 +116,12 @@ if (
   entrypoint !== undefined &&
   resolve(entrypoint) === fileURLToPath(import.meta.url)
 ) {
-  process.exitCode = runCli(process.argv.slice(2));
+  runCli(process.argv.slice(2))
+    .then((exitCode) => {
+      process.exitCode = exitCode;
+    })
+    .catch((error: unknown) => {
+      process.stderr.write(`${getPrintModeErrorMessage(error)}\n`);
+      process.exitCode = 1;
+    });
 }
