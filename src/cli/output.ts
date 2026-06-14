@@ -256,9 +256,15 @@ function renderCliDryRunPreviewText(preview: CliDryRunPreview): string {
     "OpenHarness Dry Run",
     "",
     "Readiness",
-    `  Level: ${preview.readiness.level}`,
-    ...formatList("Reasons", preview.readiness.reasons),
-    ...formatList("Next Actions", preview.readiness.nextActions),
+    `- level: ${preview.readiness.level}`,
+    ...formatList("reasons", preview.readiness.reasons),
+    ...formatList("next actions", preview.readiness.nextActions),
+    "",
+    "Execution",
+    `  CWD: ${preview.cwd}`,
+    `  Prompt: ${preview.promptPreview || "(none)"}`,
+    `  Entrypoint: ${preview.entrypoint.kind}`,
+    `  Detail: ${preview.entrypoint.detail}`,
     "",
     "Resolved Settings",
     `  Provider: ${preview.settings.provider} (${preview.settings.providerSource})`,
@@ -271,7 +277,6 @@ function renderCliDryRunPreviewText(preview: CliDryRunPreview): string {
     ...formatOptionalSetting("Max Turns", preview.settings.maxTurns),
     "",
     "Paths",
-    `  CWD: ${preview.cwd}`,
     `  Project Config Dir: ${preview.paths.projectConfigDir}`,
     `  Session Dir: ${preview.paths.sessionDir}`,
     "",
@@ -299,10 +304,10 @@ function renderCliDryRunPreviewText(preview: CliDryRunPreview): string {
 
 function formatList(label: string, values: readonly string[]): readonly string[] {
   if (values.length === 0) {
-    return [`  ${label}: none`];
+    return [`- ${label}: none`];
   }
 
-  return [`  ${label}:`, ...values.map((value) => `    - ${value}`)];
+  return [`- ${label}:`, ...values.map((value) => `  - ${value}`)];
 }
 
 function formatOptionalSetting(
