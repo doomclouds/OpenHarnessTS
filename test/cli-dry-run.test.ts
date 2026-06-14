@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -151,14 +151,54 @@ describe("buildCliDryRunPreview", () => {
         env: isolatedEnv(root)
       });
 
-      expect(preview.discovery.instructionSources).toEqual([
-        expect.objectContaining({
-          kind: "agents",
-          path: join(resolve(root), "AGENTS.md"),
-          truncated: false
-        })
-      ]);
+      expect(preview.discovery.instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "agents",
+            path: join(resolve(root), "AGENTS.md"),
+            truncated: false
+          })
+        ])
+      );
       expect(preview.systemPromptPreview).toContain("DRY_RUN_TARGET");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers ancestor project instruction sources from child cwd", () => {
+    const root = createTempDir("openharness-dry-run-ancestor-instructions-");
+    const child = join(root, "packages", "app");
+
+    try {
+      mkdirSync(child, { recursive: true });
+      writeFileSync(
+        join(root, "AGENTS.md"),
+        "# Ancestor Agent Instructions\n\nAlways mention ANCESTOR_DRY_RUN_TARGET.\n",
+        "utf8"
+      );
+
+      const preview = buildCliDryRunPreview({
+        prompt: "hello",
+        cwd: child,
+        outputFormat: "text",
+        apiKey: "flag-key",
+        env: isolatedEnv(root)
+      });
+
+      expect(preview.cwd).toBe(resolve(child));
+      expect(preview.discovery.instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "agents",
+            path: join(resolve(root), "AGENTS.md"),
+            truncated: false
+          })
+        ])
+      );
+      expect(preview.systemPromptPreview).toContain(
+        "ANCESTOR_DRY_RUN_TARGET"
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

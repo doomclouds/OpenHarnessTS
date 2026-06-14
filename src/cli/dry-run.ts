@@ -113,10 +113,7 @@ export function buildCliDryRunPreview(
   });
   const runtimePrompt = buildRuntimePrompt({
     cwd: paths.cwd,
-    permissionMode,
-    instructionOptions: {
-      stopAt: paths.cwd
-    }
+    permissionMode
   });
   const tools = summarizeTools(
     createDefaultProjectToolRegistry().toApiSchema()
@@ -264,24 +261,7 @@ function safeShort(value: string, limit: number): string {
 }
 
 function createSystemPromptPreview(value: string): string {
-  return `# OpenHarness\n\n${safeMiddle(value, 2000)}`;
-}
-
-function safeMiddle(value: string, limit: number): string {
-  const characters = Array.from(value);
-
-  if (characters.length <= limit) {
-    return value;
-  }
-
-  const marker = "\n...\n";
-  const visibleLimit = Math.max(0, limit - Array.from(marker).length);
-  const headLength = Math.ceil(visibleLimit / 2);
-  const tailLength = Math.floor(visibleLimit / 2);
-
-  return `${characters.slice(0, headLength).join("")}${marker}${characters
-    .slice(characters.length - tailLength)
-    .join("")}`;
+  return `# OpenHarness\n\n${safeShort(value, 12000)}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
