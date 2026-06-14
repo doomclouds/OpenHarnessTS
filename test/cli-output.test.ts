@@ -14,11 +14,26 @@ import {
   type SessionSnapshot,
   type SessionSummary
 } from "../src/index.js";
-import {
-  renderCliErrorOutput,
-  renderCliOutput,
-  type PrintModeResult
-} from "../src/cli/index.js";
+import * as cli from "../src/cli/index.js";
+import type { PrintModeResult } from "../src/cli/index.js";
+
+type RenderCliOutput = (options: {
+  readonly result: PrintModeResult;
+  readonly format: "text" | "json" | "stream-json";
+}) => string;
+
+type RenderCliErrorOutput = (options: {
+  readonly format: "text" | "json" | "stream-json";
+  readonly message: string;
+  readonly code?: string;
+}) => string;
+
+const renderCliOutput = (
+  cli as unknown as { readonly renderCliOutput: RenderCliOutput }
+).renderCliOutput;
+const renderCliErrorOutput = (
+  cli as unknown as { readonly renderCliErrorOutput: RenderCliErrorOutput }
+).renderCliErrorOutput;
 
 class EmptySessionBackend implements SessionBackend {
   public async saveSnapshot(
