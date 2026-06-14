@@ -90,8 +90,8 @@ export async function runCli(
 
   try {
     const printResult = await runPrintMode({
-      prompt: result.prompt,
-      cwd: result.cwd,
+      prompt: result.options.prompt,
+      cwd: result.options.cwd,
       ...options.printMode
     });
     io.stdout(`${printResult.assistantText}\n`);
