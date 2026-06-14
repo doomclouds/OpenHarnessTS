@@ -70,14 +70,18 @@ function createResult(): PrintModeResult {
     sessionId: "session_output",
     cwd: "C:\\work\\project",
     model: "deepseek-test",
-    snapshotPath: "C:\\work\\project\\.openharness\\session.jsonl",
-    transcriptPath: "C:\\work\\project\\.openharness\\transcript.md",
+    snapshotPath:
+      "C:\\work\\project\\.openharness\\session-session_output.jsonl",
+    transcriptPath:
+      "C:\\work\\project\\.openharness\\transcript-session_output.md",
     session: {
       sessionId: "session_output",
       sessionDir: "C:\\work\\project\\.openharness",
       latestPath: "C:\\work\\project\\.openharness\\latest.json",
-      snapshotPath: "C:\\work\\project\\.openharness\\session.jsonl",
-      transcriptPath: "C:\\work\\project\\.openharness\\transcript.md",
+      snapshotPath:
+        "C:\\work\\project\\.openharness\\session-session_output.jsonl",
+      transcriptPath:
+        "C:\\work\\project\\.openharness\\transcript-session_output.md",
       messageCount: 2,
       summary: "Hello"
     },
@@ -133,6 +137,15 @@ describe("renderCliOutput", () => {
       readonly cwd: string;
       readonly model: string;
       readonly snapshotPath: string;
+      readonly session: {
+        readonly sessionId: string;
+        readonly sessionDir: string;
+        readonly latestPath: string;
+        readonly snapshotPath: string;
+        readonly transcriptPath: string;
+        readonly messageCount: number;
+        readonly summary: string;
+      };
       readonly summary: {
         readonly eventCount: number;
         readonly textDeltaCount: number;
@@ -142,6 +155,8 @@ describe("renderCliOutput", () => {
         readonly errors: readonly unknown[];
       };
       readonly events?: unknown;
+      readonly messages?: unknown;
+      readonly transcript?: unknown;
     };
 
     expect(parsed.type).toBe("final_result");
@@ -151,8 +166,21 @@ describe("renderCliOutput", () => {
     expect(parsed.cwd).toBe("C:\\work\\project");
     expect(parsed.model).toBe("deepseek-test");
     expect(parsed.snapshotPath).toBe(
-      "C:\\work\\project\\.openharness\\session.jsonl"
+      "C:\\work\\project\\.openharness\\session-session_output.jsonl"
     );
+    expect(parsed.session).toEqual({
+      sessionId: "session_output",
+      sessionDir: "C:\\work\\project\\.openharness",
+      latestPath: "C:\\work\\project\\.openharness\\latest.json",
+      snapshotPath:
+        "C:\\work\\project\\.openharness\\session-session_output.jsonl",
+      transcriptPath:
+        "C:\\work\\project\\.openharness\\transcript-session_output.md",
+      messageCount: 2,
+      summary: "Hello"
+    });
+    expect(parsed.session.sessionId).toBe(parsed.sessionId);
+    expect(parsed.session.snapshotPath).toBe(parsed.snapshotPath);
     expect(parsed.summary).toMatchObject({
       eventCount: 7,
       textDeltaCount: 2,
@@ -162,6 +190,8 @@ describe("renderCliOutput", () => {
     expect(parsed.summary.statuses).toHaveLength(1);
     expect(parsed.summary.errors).toHaveLength(1);
     expect(parsed.events).toBeUndefined();
+    expect(parsed.messages).toBeUndefined();
+    expect(parsed.transcript).toBeUndefined();
   });
 
   it("renders stream-json output as ordered json lines ending in final result", () => {
@@ -184,7 +214,12 @@ describe("renderCliOutput", () => {
       type: "final_result",
       outputFormat: "stream-json",
       assistantText: "Hello from OpenHarness.",
-      sessionId: "session_output"
+      sessionId: "session_output",
+      session: {
+        sessionId: "session_output",
+        transcriptPath:
+          "C:\\work\\project\\.openharness\\transcript-session_output.md"
+      }
     });
   });
 });
