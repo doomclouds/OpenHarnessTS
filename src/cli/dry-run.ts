@@ -167,7 +167,10 @@ export function buildCliDryRunPreview(
       tools
     },
     readiness,
-    systemPromptPreview: createSystemPromptPreview(runtimePrompt.prompt)
+    systemPromptPreview: createSystemPromptPreview(
+      runtimePrompt.prompt,
+      runtimePrompt.projectInstructions?.files ?? []
+    )
   };
 }
 
@@ -260,8 +263,23 @@ function safeShort(value: string, limit: number): string {
     : value;
 }
 
-function createSystemPromptPreview(value: string): string {
-  return `# OpenHarness\n\n${safeShort(value, 12000)}`;
+function createSystemPromptPreview(
+  value: string,
+  instructionFiles: readonly {
+    readonly path: string;
+    readonly content: string;
+  }[]
+): string {
+  const sections = ["# OpenHarness", "", safeShort(value, 4000)];
+
+  if (instructionFiles.length > 0) {
+    sections.push("", "# Instruction Source Excerpts");
+    for (const file of instructionFiles.slice(0, 12)) {
+      sections.push("", `## ${file.path}`, safeShort(file.content.trim(), 1200));
+    }
+  }
+
+  return sections.join("\n");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

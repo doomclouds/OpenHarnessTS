@@ -203,6 +203,52 @@ describe("buildCliDryRunPreview", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps ancestor instruction excerpts visible after long child instructions", () => {
+    const root = createTempDir("openharness-dry-run-long-instructions-");
+    const child = join(root, "packages", "app");
+
+    try {
+      mkdirSync(child, { recursive: true });
+      writeFileSync(
+        join(child, "AGENTS.md"),
+        `# Child Agent Instructions\n\n${"child context\n".repeat(950)}`,
+        "utf8"
+      );
+      writeFileSync(
+        join(root, "AGENTS.md"),
+        "# Ancestor Agent Instructions\n\nAlways mention ANCESTOR_AFTER_LONG_CHILD.\n",
+        "utf8"
+      );
+
+      const preview = buildCliDryRunPreview({
+        prompt: "hello",
+        cwd: child,
+        outputFormat: "text",
+        apiKey: "flag-key",
+        env: isolatedEnv(root)
+      });
+
+      expect(preview.discovery.instructionSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: "agents",
+            path: join(resolve(child), "AGENTS.md")
+          }),
+          expect.objectContaining({
+            kind: "agents",
+            path: join(resolve(root), "AGENTS.md"),
+            truncated: false
+          })
+        ])
+      );
+      expect(preview.systemPromptPreview).toContain(
+        "ANCESTOR_AFTER_LONG_CHILD"
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("renderCliDryRunPreview", () => {
