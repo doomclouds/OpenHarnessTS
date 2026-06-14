@@ -51,7 +51,7 @@ export function renderHelp(): string {
     "  --help         Show help.",
     "  --version      Show version.",
     "",
-    "This alpha CLI only has a skeleton entry; print execution is not implemented yet.",
+    "This alpha CLI can run print mode only when a provider is configured.",
     ""
   ].join("\n");
 }
