@@ -201,3 +201,113 @@ describe("built CLI executable smoke", () => {
     }
   });
 });
+
+describe("built CLI dry-run acceptance", () => {
+  it("prints bare dry-run text without creating a config directory", async () => {
+    const root = createTempRoot("openharness-built-dry-run-text-");
+
+    try {
+      const result = await runBuiltCli(["--cwd", root, "--dry-run"], {
+        env: createIsolatedEnv(root)
+      });
+
+      expectCleanSuccess(result);
+      expect(result.stdout).toContain("OpenHarness Dry Run");
+      expect(result.stdout).toContain("interactive_session");
+      expect(result.stdout).toContain("Available Tools");
+      expect(result.stdout).toContain("read_file");
+      expect(existsSync(join(root, "config"))).toBe(false);
+      expect(existsSync(join(root, ".openharness"))).toBe(false);
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+
+  it("prints dry-run JSON for a model prompt without leaking the flag API key", async () => {
+    const root = createTempRoot("openharness-built-dry-run-json-");
+
+    try {
+      const result = await runBuiltCli(
+        [
+          "--dry-run",
+          "--print",
+          "hello",
+          "--api-key",
+          "flag-key",
+          "--output-format",
+          "json"
+        ],
+        {
+          cwd: root,
+          env: createIsolatedEnv(root)
+        }
+      );
+
+      expectCleanSuccess(result);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        type: "dry_run_preview",
+        mode: "dry-run",
+        entrypoint: { kind: "model_prompt" },
+        readiness: { level: "ready" }
+      });
+      expect(result.stdout).not.toContain("flag-key");
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+
+  it("prints dry-run stream-json as exactly one JSON line", async () => {
+    const root = createTempRoot("openharness-built-dry-run-stream-json-");
+
+    try {
+      const result = await runBuiltCli(
+        ["--dry-run", "--output-format", "stream-json"],
+        {
+          cwd: root,
+          env: createIsolatedEnv(root)
+        }
+      );
+
+      expectCleanSuccess(result);
+      const lines = result.stdout.trimEnd().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+        type: "dry_run_preview",
+        mode: "dry-run"
+      });
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+
+  it("prints missing provider key JSON failure without session artifact paths", async () => {
+    const root = createTempRoot("openharness-built-missing-key-json-");
+
+    try {
+      const result = await runBuiltCli(
+        ["--print", "hello", "--output-format", "json"],
+        {
+          cwd: root,
+          env: createIsolatedEnv(root)
+        }
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe(
+        `${JSON.stringify({
+          type: "error",
+          outputFormat: "json",
+          message:
+            "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key."
+        })}\n`
+      );
+      expect(result.stderr).not.toContain("snapshotPath");
+      expect(result.stderr).not.toContain("transcriptPath");
+      expect(result.stderr).not.toContain("latestPath");
+      expect(result.stderr).not.toContain("sessionDir");
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+});
