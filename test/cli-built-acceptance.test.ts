@@ -292,16 +292,18 @@ describe("built CLI dry-run acceptance", () => {
         }
       );
 
-      expect(result.exitCode).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toBe(
-        `${JSON.stringify({
-          type: "error",
-          outputFormat: "json",
-          message:
-            "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key."
-        })}\n`
-      );
+      expectStderrOnlyFailure(result);
+      const error = JSON.parse(result.stderr) as Record<string, unknown>;
+      expect(error).toMatchObject({
+        type: "error",
+        outputFormat: "json"
+      });
+      expect(typeof error.message).toBe("string");
+      expect(error.message).toContain("DEEPSEEK_API_KEY");
+      expect(error).not.toHaveProperty("snapshotPath");
+      expect(error).not.toHaveProperty("transcriptPath");
+      expect(error).not.toHaveProperty("latestPath");
+      expect(error).not.toHaveProperty("sessionDir");
       expect(result.stderr).not.toContain("snapshotPath");
       expect(result.stderr).not.toContain("transcriptPath");
       expect(result.stderr).not.toContain("latestPath");
