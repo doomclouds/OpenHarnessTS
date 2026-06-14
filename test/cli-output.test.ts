@@ -186,6 +186,33 @@ describe("renderCliOutput", () => {
     expect(parsed.transcript).toBeUndefined();
   });
 
+  it("projects session metadata without leaking extra session fields", () => {
+    const result = {
+      ...createResult(),
+      session: {
+        ...expectedSession,
+        messages: ["raw message"],
+        transcript: "raw transcript",
+        sessionBackend: { unsafe: true }
+      }
+    } as unknown as PrintModeResult;
+
+    const parsed = JSON.parse(
+      renderCliOutput({ result, format: "json" })
+    ) as {
+      readonly session: typeof expectedSession & {
+        readonly messages?: unknown;
+        readonly transcript?: unknown;
+        readonly sessionBackend?: unknown;
+      };
+    };
+
+    expect(parsed.session).toEqual(expectedSession);
+    expect(parsed.session.messages).toBeUndefined();
+    expect(parsed.session.transcript).toBeUndefined();
+    expect(parsed.session.sessionBackend).toBeUndefined();
+  });
+
   it("renders stream-json output as ordered json lines ending in final result", () => {
     const output = renderCliOutput({
       result: createResult(),

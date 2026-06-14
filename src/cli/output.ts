@@ -159,8 +159,22 @@ function createFinalResult(
     cwd: result.cwd,
     model: result.model,
     snapshotPath: result.snapshotPath,
-    session: { ...result.session },
+    session: createCliSessionArtifacts(result),
     summary: summarizeEvents(result.events)
+  };
+}
+
+function createCliSessionArtifacts(
+  result: PrintModeResult
+): CliSessionArtifacts {
+  return {
+    sessionId: result.session.sessionId,
+    sessionDir: result.session.sessionDir,
+    latestPath: result.session.latestPath,
+    snapshotPath: result.session.snapshotPath,
+    transcriptPath: result.session.transcriptPath,
+    messageCount: result.session.messageCount,
+    summary: result.session.summary
   };
 }
 
