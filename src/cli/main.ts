@@ -13,7 +13,8 @@ import {
 import {
   CliProviderError,
   createCliPrintProvider,
-  type CliPrintProvider
+  type CliPrintProvider,
+  type CliPrintProviderFlags
 } from "./provider.js";
 
 export interface CliIo {
@@ -128,8 +129,18 @@ function createDirectPrintModeSetup(
   let provider: CliPrintProvider;
 
   try {
+    const providerFlags: CliPrintProviderFlags = {
+      ...(flags.apiKey === undefined ? {} : { apiKey: flags.apiKey }),
+      ...(flags.baseURL === undefined ? {} : { baseURL: flags.baseURL }),
+      ...(flags.model === undefined ? {} : { model: flags.model }),
+      ...(flags.maxTurns === undefined ? {} : { maxTurns: flags.maxTurns }),
+      ...(flags.permissionMode === undefined
+        ? {}
+        : { permissionMode: flags.permissionMode })
+    };
+
     provider = createCliPrintProvider({
-      flags,
+      flags: providerFlags,
       ...(options.env === undefined ? {} : { env: options.env }),
       ...(options.createSdkClient === undefined
         ? {}

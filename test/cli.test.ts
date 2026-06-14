@@ -119,6 +119,35 @@ function createIsolatedCliEnv(root: string): NodeJS.ProcessEnv {
   };
 }
 
+function getSdkRequest(
+  fakeSdk: FakeSdkClient,
+  index = 0
+): Record<string, unknown> {
+  const request = fakeSdk.requests[index];
+
+  expect(isRecord(request)).toBe(true);
+  return request as Record<string, unknown>;
+}
+
+function getSystemPrompt(request: Record<string, unknown>): string {
+  const messages = request["messages"];
+  expect(Array.isArray(messages)).toBe(true);
+
+  const systemMessage = (messages as readonly unknown[]).find(
+    (message): message is Record<string, unknown> =>
+      isRecord(message) && message["role"] === "system"
+  );
+
+  expect(systemMessage).toBeDefined();
+  const content = systemMessage?.["content"];
+  expect(typeof content).toBe("string");
+  return content as string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 describe("CLI parser", () => {
   it("parses help", () => {
     expect(parseCliArgs(["--help"], { version: "1.2.3" })).toEqual({
@@ -638,7 +667,9 @@ describe("CLI runner", () => {
           baseURL: "https://flag.example.com"
         }
       ]);
-      expect(JSON.stringify(fakeSdk.requests[0])).toContain("flag-model");
+      expect(getSdkRequest(fakeSdk)).toMatchObject({
+        model: "flag-model"
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -697,7 +728,9 @@ describe("CLI runner", () => {
       expect(captured.stdout).toEqual([]);
       expect(captured.stderr).toEqual(["Max turns exceeded: 1\n"]);
       expect(fakeSdk.requests).toHaveLength(1);
-      expect(JSON.stringify(fakeSdk.requests[0])).toContain("- Current mode: plan");
+      expect(getSystemPrompt(getSdkRequest(fakeSdk))).toContain(
+        "- Current mode: plan"
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
