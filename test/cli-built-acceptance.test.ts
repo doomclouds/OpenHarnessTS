@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -659,6 +659,92 @@ describe("built CLI fixture print acceptance", () => {
       );
       expect(transcript).toContain(
         "CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts."
+      );
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+
+  it("keeps built text print output to assistant text only", async () => {
+    const root = createTempRoot("openharness-built-print-text-");
+
+    try {
+      const cwd = await createFixtureProject(root);
+      const runnerPath = await writeBuiltPrintRunner({
+        root,
+        cwd,
+        outputFormat: "text"
+      });
+      const runner = await runProcess([runnerPath], {
+        env: createIsolatedEnv(root),
+        timeoutMs: 15_000
+      });
+
+      expectCleanSuccess(runner);
+      const envelope = JSON.parse(runner.stdout) as BuiltPrintEnvelope;
+      expect(envelope.exitCode).toBe(0);
+      expect(envelope.stderr).toBe("");
+      expect(envelope.stdout).toBe(
+        "CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts.\n"
+      );
+      expect(envelope.stdout).not.toContain("session-");
+      expect(envelope.stdout).not.toContain("latest.json");
+      expect(envelope.stdout).not.toContain("transcript-");
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+
+  it("renders built stream-json final result with session metadata", async () => {
+    const root = createTempRoot("openharness-built-print-stream-");
+
+    try {
+      const cwd = await createFixtureProject(root);
+      const runnerPath = await writeBuiltPrintRunner({
+        root,
+        cwd,
+        outputFormat: "stream-json"
+      });
+      const runner = await runProcess([runnerPath], {
+        env: createIsolatedEnv(root),
+        timeoutMs: 15_000
+      });
+
+      expectCleanSuccess(runner);
+      const envelope = JSON.parse(runner.stdout) as BuiltPrintEnvelope;
+      expect(envelope.exitCode).toBe(0);
+      expect(envelope.stderr).toBe("");
+
+      const lines = envelope.stdout.trimEnd().split("\n");
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const finalResult = JSON.parse(lines.at(-1) ?? "{}") as {
+        readonly type: string;
+        readonly outputFormat: string;
+        readonly assistantText: string;
+        readonly session: {
+          readonly sessionId: string;
+          readonly snapshotPath: string;
+          readonly latestPath: string;
+          readonly transcriptPath: string;
+        };
+        readonly messages?: unknown;
+        readonly transcript?: unknown;
+      };
+
+      expect(finalResult).toMatchObject({
+        type: "final_result",
+        outputFormat: "stream-json",
+        assistantText: "CLI_ACCEPTANCE_TARGET is defined in src/alpha.ts."
+      });
+      expect(finalResult.messages).toBeUndefined();
+      expect(finalResult.transcript).toBeUndefined();
+      expect((await stat(finalResult.session.snapshotPath)).isFile()).toBe(true);
+      expect((await stat(finalResult.session.latestPath)).isFile()).toBe(true);
+      expect((await stat(finalResult.session.transcriptPath)).isFile()).toBe(
+        true
+      );
+      expect(finalResult.session.snapshotPath).toContain(
+        `${sep}sessions${sep}`
       );
     } finally {
       removeTempRoot(root);
