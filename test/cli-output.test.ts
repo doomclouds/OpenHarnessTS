@@ -71,6 +71,16 @@ function createResult(): PrintModeResult {
     cwd: "C:\\work\\project",
     model: "deepseek-test",
     snapshotPath: "C:\\work\\project\\.openharness\\session.jsonl",
+    transcriptPath: "C:\\work\\project\\.openharness\\transcript.md",
+    session: {
+      sessionId: "session_output",
+      sessionDir: "C:\\work\\project\\.openharness",
+      latestPath: "C:\\work\\project\\.openharness\\latest.json",
+      snapshotPath: "C:\\work\\project\\.openharness\\session.jsonl",
+      transcriptPath: "C:\\work\\project\\.openharness\\transcript.md",
+      messageCount: 2,
+      summary: "Hello"
+    },
     sessionBackend: new EmptySessionBackend(),
     events: [
       createStatusEvent("starting"),

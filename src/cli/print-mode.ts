@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import type { ApiClient } from "../api/index.js";
 import { getMessageText } from "../messages/index.js";
 import type { PermissionMode } from "../permissions/index.js";
@@ -38,12 +39,24 @@ export interface RunPrintModeOptions extends PrintModeProviderOptions {
   readonly cwd?: string | URL;
 }
 
+export interface PrintModeSessionArtifacts {
+  readonly sessionId: string;
+  readonly sessionDir: string;
+  readonly latestPath: string;
+  readonly snapshotPath: string;
+  readonly transcriptPath: string;
+  readonly messageCount: number;
+  readonly summary: string;
+}
+
 export interface PrintModeResult {
   readonly assistantText: string;
   readonly sessionId: string;
   readonly cwd: string;
   readonly model: string;
   readonly snapshotPath: string;
+  readonly transcriptPath: string;
+  readonly session: PrintModeSessionArtifacts;
   readonly events: readonly StreamEvent[];
   readonly sessionBackend: SessionBackend;
 }
@@ -111,6 +124,8 @@ export async function runPrintMode(
       ? textDeltas.join("")
       : getFinalAssistantText(finalAssistantEvent);
   const snapshot = await savePrintModeSnapshot(runtime, options, usage);
+  const transcriptPath = await exportPrintModeTranscript(runtime, options);
+  const session = createPrintModeSessionArtifacts(snapshot, transcriptPath);
 
   return {
     assistantText,
@@ -118,6 +133,8 @@ export async function runPrintMode(
     cwd: runtime.cwd,
     model: runtime.engine.getModel(),
     snapshotPath: snapshot.path,
+    transcriptPath,
+    session,
     events,
     sessionBackend: runtime.sessionBackend
   };
@@ -156,6 +173,42 @@ async function savePrintModeSnapshot(
       `Session snapshot save failed: ${getErrorMessage(error)}`
     );
   }
+}
+
+async function exportPrintModeTranscript(
+  runtime: ReturnType<typeof buildProjectRuntime>,
+  options: RunPrintModeOptions
+): Promise<string> {
+  try {
+    return await runtime.sessionBackend.exportTranscript({
+      cwd: runtime.cwd,
+      sessionId: runtime.sessionId,
+      ...(options.homeDir === undefined ? {} : { homeDir: options.homeDir }),
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.now === undefined ? {} : { now: options.now })
+    });
+  } catch (error) {
+    throw new PrintModeError(
+      `Session transcript export failed: ${getErrorMessage(error)}`
+    );
+  }
+}
+
+function createPrintModeSessionArtifacts(
+  snapshot: SessionSnapshot,
+  transcriptPath: string
+): PrintModeSessionArtifacts {
+  const sessionDir = dirname(snapshot.path);
+
+  return {
+    sessionId: snapshot.sessionId,
+    sessionDir,
+    latestPath: join(sessionDir, "latest.json"),
+    snapshotPath: snapshot.path,
+    transcriptPath,
+    messageCount: snapshot.messageCount,
+    summary: snapshot.summary
+  };
 }
 
 function getErrorMessage(error: unknown): string {
