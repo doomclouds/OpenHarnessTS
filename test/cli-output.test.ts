@@ -217,8 +217,12 @@ describe("renderCliOutput", () => {
     const final = lines.at(-1) as {
       readonly snapshotPath: string;
       readonly session: { readonly snapshotPath: string };
+      readonly messages?: unknown;
+      readonly transcript?: unknown;
     };
     expect(final.session.snapshotPath).toBe(final.snapshotPath);
+    expect(final.messages).toBeUndefined();
+    expect(final.transcript).toBeUndefined();
   });
 });
 
