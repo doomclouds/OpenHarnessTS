@@ -180,7 +180,8 @@ describe("CLI parser", () => {
       type: "print",
       options: {
         prompt: "hello",
-        cwd: resolve(cwd)
+        cwd: resolve(cwd),
+        outputFormat: "text"
       }
     });
   });
@@ -262,7 +263,8 @@ describe("CLI parser", () => {
         apiKey: "flag-key",
         baseURL: "https://deepseek.example.com///",
         maxTurns: 3,
-        permissionMode: "full_auto"
+        permissionMode: "full_auto",
+        outputFormat: "text"
       }
     });
   });
@@ -345,7 +347,8 @@ describe("CLI parser", () => {
         type: "print",
         options: {
           prompt: "hello",
-          cwd: resolve(root)
+          cwd: resolve(root),
+          outputFormat: "text"
         }
       });
     } finally {

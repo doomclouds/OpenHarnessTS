@@ -21,9 +21,12 @@ export interface CliParseError {
   readonly value?: string;
 }
 
+export type CliOutputFormat = "text" | "json" | "stream-json";
+
 export interface CliPrintOptions {
   readonly prompt: string;
   readonly cwd: string;
+  readonly outputFormat: CliOutputFormat;
   readonly model?: string;
   readonly apiKey?: string;
   readonly baseURL?: string;
@@ -142,6 +145,18 @@ function parsePermissionMode(value: string): PermissionMode | CliParseResult {
   );
 }
 
+function parseOutputFormat(value: string): CliOutputFormat | CliParseResult {
+  if (value === "text" || value === "json" || value === "stream-json") {
+    return value;
+  }
+
+  return invalidOptionValue(
+    "--output-format",
+    value,
+    "--output-format must be one of: text, json, stream-json."
+  );
+}
+
 function isExistingDirectory(path: string): boolean {
   if (!existsSync(path)) {
     return false;
@@ -165,6 +180,7 @@ export function parseCliArgs(
   let baseURL: string | undefined;
   let maxTurns: number | undefined;
   let permissionMode: PermissionMode | undefined;
+  let outputFormat: CliOutputFormat = "text";
 
   if (args.length === 0) {
     return {
@@ -291,6 +307,22 @@ export function parseCliArgs(
       continue;
     }
 
+    if (token === "--output-format") {
+      const value = readNonEmptyOptionValue(args, index, "--output-format");
+      if (typeof value !== "string") {
+        return value;
+      }
+
+      const parsed = parseOutputFormat(value);
+      if (typeof parsed !== "string") {
+        return parsed;
+      }
+
+      outputFormat = parsed;
+      index += 1;
+      continue;
+    }
+
     return unknownOption(token);
   }
 
@@ -300,6 +332,7 @@ export function parseCliArgs(
       options: {
         prompt: printPrompt,
         cwd,
+        outputFormat,
         ...(model === undefined ? {} : { model }),
         ...(apiKey === undefined ? {} : { apiKey }),
         ...(baseURL === undefined ? {} : { baseURL }),
