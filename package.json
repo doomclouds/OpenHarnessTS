@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc -b src",
     "clean": "rimraf dist .tsbuild coverage",
-    "test": "vitest run --exclude test/deepseek.integration.test.ts",
+    "test": "vitest run --exclude test/{deepseek.integration,cli-built-acceptance}.test.ts",
     "test:cli-built": "vitest run test/cli-built-acceptance.test.ts",
     "test:deepseek": "vitest run test/deepseek.integration.test.ts",
     "test:watch": "vitest",
