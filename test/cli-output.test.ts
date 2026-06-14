@@ -206,23 +206,43 @@ describe("renderCliOutput", () => {
       "error",
       "final_result"
     ]);
-    expect(lines.at(-1)).toMatchObject({
+    const final = lines.at(-1) as {
+      readonly type: string;
+      readonly outputFormat: string;
+      readonly assistantText: string;
+      readonly sessionId: string;
+      readonly cwd: string;
+      readonly model: string;
+      readonly snapshotPath: string;
+      readonly summary: unknown;
+      readonly session: typeof expectedSession & {
+        readonly messages?: unknown;
+        readonly transcript?: unknown;
+      };
+      readonly messages?: unknown;
+      readonly transcript?: unknown;
+    };
+
+    expect(final).toMatchObject({
       type: "final_result",
       outputFormat: "stream-json",
       assistantText: "Hello from OpenHarness.",
       sessionId: "session_output",
-      snapshotPath: expectedSession.snapshotPath,
-      session: expectedSession
+      cwd: "C:\\work\\project",
+      model: "deepseek-test",
+      snapshotPath: expectedSession.snapshotPath
     });
-    const final = lines.at(-1) as {
-      readonly snapshotPath: string;
-      readonly session: { readonly snapshotPath: string };
-      readonly messages?: unknown;
-      readonly transcript?: unknown;
-    };
+    expect(final.summary).toMatchObject({
+      eventCount: 7,
+      textDeltaCount: 2,
+      toolCallCount: 1
+    });
+    expect(final.session).toEqual(expectedSession);
     expect(final.session.snapshotPath).toBe(final.snapshotPath);
     expect(final.messages).toBeUndefined();
     expect(final.transcript).toBeUndefined();
+    expect(final.session.messages).toBeUndefined();
+    expect(final.session.transcript).toBeUndefined();
   });
 });
 
