@@ -574,6 +574,9 @@ describe("CLI print-mode integration", () => {
 
       expect(exitCode).toBe(0);
       expect(captured.stdout).toEqual(["CLI text.\n"]);
+      expect(captured.stdout.join("")).not.toContain("session-");
+      expect(captured.stdout.join("")).not.toContain("transcript-");
+      expect(captured.stdout.join("")).not.toContain("latest.json");
       expect(captured.stderr).toEqual([]);
     } finally {
       await removeTempProject(root);
@@ -610,6 +613,15 @@ describe("CLI print-mode integration", () => {
         readonly assistantText: string;
         readonly sessionId: string;
         readonly snapshotPath: string;
+        readonly session: {
+          readonly sessionId: string;
+          readonly sessionDir: string;
+          readonly latestPath: string;
+          readonly snapshotPath: string;
+          readonly transcriptPath: string;
+          readonly messageCount: number;
+          readonly summary: string;
+        };
       };
       expect(parsed).toMatchObject({
         type: "final_result",
@@ -618,6 +630,22 @@ describe("CLI print-mode integration", () => {
         sessionId: "cli_json_output"
       });
       expect(parsed.snapshotPath).toContain("session-cli_json_output.jsonl");
+      expect(parsed.session).toMatchObject({
+        sessionId: "cli_json_output",
+        snapshotPath: parsed.snapshotPath,
+        transcriptPath: join(
+          dirname(parsed.snapshotPath),
+          "transcript-cli_json_output.md"
+        ),
+        latestPath: join(dirname(parsed.snapshotPath), "latest.json"),
+        messageCount: 2,
+        summary: "Hello."
+      });
+      await expectFile(parsed.session.snapshotPath);
+      await expectFile(parsed.session.latestPath);
+      await expectFile(parsed.session.transcriptPath);
+      const latest = await readFile(parsed.session.latestPath, "utf8");
+      expect(latest).toContain("\"sessionId\": \"cli_json_output\"");
     } finally {
       await removeTempProject(root);
     }
@@ -663,6 +691,19 @@ describe("CLI print-mode integration", () => {
         "assistant_text_delta",
         "final_result"
       ]);
+      const final = lines.at(-1) as {
+        readonly type: string;
+        readonly session: {
+          readonly sessionId: string;
+          readonly snapshotPath: string;
+          readonly transcriptPath: string;
+          readonly latestPath: string;
+        };
+      };
+      expect(final.session.sessionId).toBe("cli_stream_json_output");
+      await expectFile(final.session.snapshotPath);
+      await expectFile(final.session.latestPath);
+      await expectFile(final.session.transcriptPath);
     } finally {
       await removeTempProject(root);
     }
@@ -713,6 +754,38 @@ describe("CLI print-mode integration", () => {
         type: "error",
         outputFormat: "json",
         message: "API error: network down"
+      });
+    } finally {
+      await removeTempProject(root);
+    }
+  });
+
+  it("writes json errors when transcript export fails", async () => {
+    const root = await makeTempProject("openharness-cli-transcript-json-error-");
+    const captured = createCapturedIo();
+    const client = new ScriptedApiClient([[messageComplete("Saved text.")]]);
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--print", "Hello.", "--output-format", "json"],
+        captured.io,
+        {
+          version: "1.2.3",
+          printMode: {
+            apiClient: client,
+            model: "mock-model",
+            sessionId: "cli_transcript_json_error",
+            sessionBackend: new FailingTranscriptSessionBackend()
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(JSON.parse(captured.stderr.join(""))).toEqual({
+        type: "error",
+        outputFormat: "json",
+        message: "Session transcript export failed: transcript disk full"
       });
     } finally {
       await removeTempProject(root);
