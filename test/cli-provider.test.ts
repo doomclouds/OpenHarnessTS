@@ -10,6 +10,9 @@ import {
   type DeepSeekSdkOptions
 } from "../src/index.js";
 
+const EXPECTED_MISSING_DEEPSEEK_API_KEY_MESSAGE =
+  "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.";
+
 function emptyFakeSdkClient(): DeepSeekSdkClient {
   return {
     chat: {
@@ -114,7 +117,7 @@ describe("createCliPrintProvider", () => {
 
   it("exports the stable missing key message", () => {
     expect(MISSING_DEEPSEEK_API_KEY_MESSAGE).toBe(
-      "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key."
+      EXPECTED_MISSING_DEEPSEEK_API_KEY_MESSAGE
     );
   });
 
@@ -134,7 +137,7 @@ describe("createCliPrintProvider", () => {
           return emptyFakeSdkClient();
         }
       })
-    ).toThrow(MISSING_DEEPSEEK_API_KEY_MESSAGE);
+    ).toThrow(EXPECTED_MISSING_DEEPSEEK_API_KEY_MESSAGE);
     expect(sdkOptions).toEqual([]);
   });
 
