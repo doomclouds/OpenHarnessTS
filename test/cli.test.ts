@@ -186,6 +186,54 @@ describe("CLI parser", () => {
     });
   });
 
+  it("parses bare dry-run with the resolved default cwd", () => {
+    const cwd = process.cwd();
+
+    expect(parseCliArgs(["--dry-run"], { cwd, version: "1.2.3" })).toEqual({
+      type: "dry_run",
+      options: {
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
+  it("parses dry-run print prompts", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--dry-run", "--print", "hello"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "dry_run",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
+  it("parses dry-run after the print prompt", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--print", "hello", "--dry-run"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "dry_run",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        outputFormat: "text"
+      }
+    });
+  });
+
   it("defaults print output format to text", () => {
     const cwd = process.cwd();
 
@@ -228,6 +276,64 @@ describe("CLI parser", () => {
     ).toMatchObject({
       type: "print",
       options: { outputFormat: "stream-json" }
+    });
+  });
+
+  it("parses dry-run with provider, runtime, cwd, and output flags", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(
+        [
+          "--cwd",
+          cwd,
+          "--dry-run",
+          "--print",
+          "hello",
+          "--model",
+          "deepseek-test",
+          "--api-key",
+          "flag-key",
+          "--base-url",
+          "https://deepseek.example.com///",
+          "--max-turns",
+          "3",
+          "--permission-mode",
+          "full_auto",
+          "--output-format",
+          "json"
+        ],
+        { version: "1.2.3" }
+      )
+    ).toEqual({
+      type: "dry_run",
+      options: {
+        prompt: "hello",
+        cwd: resolve(cwd),
+        model: "deepseek-test",
+        apiKey: "flag-key",
+        baseURL: "https://deepseek.example.com///",
+        maxTurns: 3,
+        permissionMode: "full_auto",
+        outputFormat: "json"
+      }
+    });
+  });
+
+  it("parses dry-run stream-json output", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--dry-run", "--output-format", "stream-json"], {
+        cwd,
+        version: "1.2.3"
+      })
+    ).toMatchObject({
+      type: "dry_run",
+      options: {
+        cwd: resolve(cwd),
+        outputFormat: "stream-json"
+      }
     });
   });
 
@@ -309,6 +415,30 @@ describe("CLI parser", () => {
         prompt: "hello",
         cwd: resolve(cwd),
         permissionMode: "full_auto"
+      }
+    });
+  });
+
+  it("rejects missing dry-run print prompt", () => {
+    expect(parseCliArgs(["--dry-run", "--print"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "missing_print_prompt",
+        option: "--print",
+        message: "--print requires a non-empty prompt value."
+      }
+    });
+  });
+
+  it("rejects empty dry-run print prompt", () => {
+    expect(
+      parseCliArgs(["--dry-run", "--print", "   "], { version: "1.2.3" })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "missing_print_prompt",
+        option: "--print",
+        message: "--print requires a non-empty prompt value."
       }
     });
   });
