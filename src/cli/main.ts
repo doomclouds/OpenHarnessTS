@@ -3,13 +3,18 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DeepSeekSdkClient, DeepSeekSdkOptions } from "../api/index.js";
+import { runTuiCli, type RunTuiCliOptions } from "../tui/index.js";
 import { buildCliDryRunPreview } from "./dry-run.js";
 import {
   renderCliDryRunPreview,
   renderCliErrorOutput,
   renderCliOutput
 } from "./output.js";
-import { parseCliArgs, type CliPrintOptions } from "./parser.js";
+import {
+  parseCliArgs,
+  type CliPrintOptions,
+  type CliTuiOptions
+} from "./parser.js";
 import {
   PrintModeError,
   runPrintMode,
@@ -34,6 +39,7 @@ export interface RunCliOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly createSdkClient?: (options: DeepSeekSdkOptions) => DeepSeekSdkClient;
   readonly printMode?: PrintModeProviderOptions;
+  readonly runTui?: (options: RunTuiCliOptions) => Promise<void>;
 }
 
 const defaultIo: CliIo = {
@@ -60,17 +66,20 @@ export function renderHelp(): string {
     "OpenHarness",
     "",
     "Usage:",
+    "  openharness --tui",
     "  openharness --print <prompt>",
     "",
     "Options:",
     "  --cwd <dir>    Run from an existing working directory.",
+    "  --tui         Start the Alpha terminal UI.",
+    "  --no-color    Disable color in the terminal UI.",
     "  --dry-run      Preview resolved runtime setup without executing.",
     "  --output-format <format>",
     "                 Render print output as text, json, or stream-json.",
     "  --help         Show help.",
     "  --version      Show version.",
     "",
-    "This alpha CLI can run print mode only when a provider is configured.",
+    "This alpha CLI supports explicit TUI mode and print mode when a provider is configured.",
     ""
   ].join("\n");
 }
@@ -144,6 +153,26 @@ export async function runCli(
     }
   }
 
+  if (result.type === "tui") {
+    let provider: CliPrintProvider | undefined;
+
+    try {
+      const setup = createDirectTuiSetup(result.options, options);
+      provider = setup.provider;
+      await (options.runTui ?? runTuiCli)(setup.options);
+      return 0;
+    } catch (error) {
+      const message = getPrintModeErrorMessage(error);
+      io.stderr(
+        renderCliErrorOutput({
+          format: "text",
+          message: provider?.redact(message) ?? message
+        })
+      );
+      return 1;
+    }
+  }
+
   let provider: CliPrintProvider | undefined;
   const outputFormat = result.options.outputFormat;
 
@@ -181,37 +210,19 @@ interface DirectPrintModeSetup {
   readonly options: RunPrintModeOptions;
 }
 
+interface DirectTuiSetup {
+  readonly provider: CliPrintProvider;
+  readonly options: RunTuiCliOptions;
+}
+
 function createDirectPrintModeSetup(
   flags: CliPrintOptions,
   options: RunCliOptions
 ): DirectPrintModeSetup {
-  let provider: CliPrintProvider;
-
-  try {
-    const providerFlags: CliPrintProviderFlags = {
-      ...(flags.apiKey === undefined ? {} : { apiKey: flags.apiKey }),
-      ...(flags.baseURL === undefined ? {} : { baseURL: flags.baseURL }),
-      ...(flags.model === undefined ? {} : { model: flags.model }),
-      ...(flags.maxTurns === undefined ? {} : { maxTurns: flags.maxTurns }),
-      ...(flags.permissionMode === undefined
-        ? {}
-        : { permissionMode: flags.permissionMode })
-    };
-
-    provider = createCliPrintProvider({
-      flags: providerFlags,
-      ...(options.env === undefined ? {} : { env: options.env }),
-      ...(options.createSdkClient === undefined
-        ? {}
-        : { createSdkClient: options.createSdkClient })
-    });
-  } catch (error) {
-    if (error instanceof CliProviderError) {
-      throw error;
-    }
-
-    throw new CliProviderError(getPrintModeErrorMessage(error));
-  }
+  const provider = createCliProviderFromFlags(
+    createCliProviderFlags(flags),
+    options
+  );
 
   return {
     provider,
@@ -225,6 +236,64 @@ function createDirectPrintModeSetup(
       ...(options.env === undefined ? {} : { env: options.env })
     }
   };
+}
+
+function createDirectTuiSetup(
+  flags: CliTuiOptions,
+  options: RunCliOptions
+): DirectTuiSetup {
+  const provider = createCliProviderFromFlags(
+    createCliProviderFlags(flags),
+    options
+  );
+
+  return {
+    provider,
+    options: {
+      cwd: flags.cwd,
+      apiClient: provider.apiClient,
+      model: provider.model,
+      permissionMode: provider.permissionMode,
+      ...(flags.colorMode === undefined ? {} : { colorMode: flags.colorMode }),
+      ...(provider.maxTurns === undefined ? {} : { maxTurns: provider.maxTurns }),
+      ...(options.env === undefined ? {} : { env: options.env })
+    }
+  };
+}
+
+function createCliProviderFlags(
+  flags: CliPrintOptions | CliTuiOptions
+): CliPrintProviderFlags {
+  return {
+    ...(flags.apiKey === undefined ? {} : { apiKey: flags.apiKey }),
+    ...(flags.baseURL === undefined ? {} : { baseURL: flags.baseURL }),
+    ...(flags.model === undefined ? {} : { model: flags.model }),
+    ...(flags.maxTurns === undefined ? {} : { maxTurns: flags.maxTurns }),
+    ...(flags.permissionMode === undefined
+      ? {}
+      : { permissionMode: flags.permissionMode })
+  };
+}
+
+function createCliProviderFromFlags(
+  flags: CliPrintProviderFlags,
+  options: RunCliOptions
+): CliPrintProvider {
+  try {
+    return createCliPrintProvider({
+      flags,
+      ...(options.env === undefined ? {} : { env: options.env }),
+      ...(options.createSdkClient === undefined
+        ? {}
+        : { createSdkClient: options.createSdkClient })
+    });
+  } catch (error) {
+    if (error instanceof CliProviderError) {
+      throw error;
+    }
+
+    throw new CliProviderError(getPrintModeErrorMessage(error));
+  }
 }
 
 function getPrintModeErrorMessage(error: unknown): string {

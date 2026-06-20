@@ -8,6 +8,7 @@ export interface ApiMessageRequest {
   readonly systemPrompt?: string;
   readonly maxTokens?: number;
   readonly tools?: readonly ToolApiSchema[];
+  readonly signal?: AbortSignal;
 }
 
 export interface ApiClient {

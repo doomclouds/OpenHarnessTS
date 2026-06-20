@@ -55,7 +55,8 @@ export async function* runQuery(
           ? { systemPrompt: context.systemPrompt }
           : {}),
         ...(context.maxTokens !== undefined ? { maxTokens: context.maxTokens } : {}),
-        tools: context.toolRegistry.toApiSchema()
+        tools: context.toolRegistry.toApiSchema(),
+        ...(context.signal !== undefined ? { signal: context.signal } : {})
       })) {
         if (event.type === "text_delta") {
           yield createAssistantTextDeltaEvent(event.text);

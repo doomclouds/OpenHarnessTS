@@ -252,6 +252,38 @@ describe("DeepSeek client configuration", () => {
     expect(events[0]).toMatchObject({ type: "message_complete" });
   });
 
+  it("passes the request abort signal to the OpenAI-compatible SDK call", async () => {
+    const controller = new AbortController();
+    const calls: unknown[][] = [];
+    const client = new DeepSeekApiClient({
+      apiKey: "direct-key",
+      createSdkClient: () => ({
+        chat: {
+          completions: {
+            async create(...args) {
+              calls.push([...args]);
+              return (async function* () {})();
+            }
+          }
+        }
+      })
+    });
+
+    const events = [];
+    for await (const event of client.streamMessage({
+      model: "deepseek-test",
+      messages: [createUserMessageFromText("hello")],
+      signal: controller.signal
+    })) {
+      events.push(event);
+    }
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toEqual({ signal: controller.signal });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "message_complete" });
+  });
+
   it("omits required tool choice when thinking is enabled", async () => {
     const requests: unknown[] = [];
     const tools: ToolApiSchema[] = [

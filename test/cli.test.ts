@@ -337,6 +337,128 @@ describe("CLI parser", () => {
     });
   });
 
+  it("parses explicit TUI mode with provider and runtime flags", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(
+        [
+          "--cwd",
+          cwd,
+          "--tui",
+          "--model",
+          "deepseek-test",
+          "--api-key",
+          "flag-key",
+          "--base-url",
+          "https://deepseek.example.com///",
+          "--max-turns",
+          "3",
+          "--permission-mode",
+          "plan",
+          "--no-color"
+        ],
+        { version: "1.2.3" }
+      )
+    ).toEqual({
+      type: "tui",
+      options: {
+        cwd: resolve(cwd),
+        model: "deepseek-test",
+        apiKey: "flag-key",
+        baseURL: "https://deepseek.example.com///",
+        maxTurns: 3,
+        permissionMode: "plan",
+        colorMode: "none"
+      }
+    });
+  });
+
+  it("rejects print and dry-run flags with TUI mode", () => {
+    const cwd = process.cwd();
+
+    expect(
+      parseCliArgs(["--cwd", cwd, "--tui", "--print", "hello"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--tui",
+        value: "--print",
+        message: "--tui cannot be combined with --print, --dry-run, or --output-format."
+      }
+    });
+
+    expect(
+      parseCliArgs(["--cwd", cwd, "--tui", "--print"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--tui",
+        value: "--print",
+        message: "--tui cannot be combined with --print, --dry-run, or --output-format."
+      }
+    });
+
+    expect(
+      parseCliArgs(["--cwd", cwd, "--tui", "--dry-run"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--tui",
+        value: "--dry-run",
+        message: "--tui cannot be combined with --print, --dry-run, or --output-format."
+      }
+    });
+
+    expect(
+      parseCliArgs(["--cwd", cwd, "--tui", "--output-format"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--tui",
+        value: "--output-format",
+        message: "--tui cannot be combined with --print, --dry-run, or --output-format."
+      }
+    });
+
+    expect(
+      parseCliArgs(["--cwd", cwd, "--tui", "--output-format", "json"], {
+        version: "1.2.3"
+      })
+    ).toEqual({
+      type: "error",
+      error: {
+        code: "invalid_option_value",
+        option: "--tui",
+        value: "--output-format",
+        message: "--tui cannot be combined with --print, --dry-run, or --output-format."
+      }
+    });
+  });
+
+  it("keeps no-color scoped to TUI mode", () => {
+    expect(parseCliArgs(["--print", "hello", "--no-color"], { version: "1.2.3" })).toEqual({
+      type: "error",
+      error: {
+        code: "unknown_option",
+        option: "--no-color",
+        message: "Unknown option: --no-color"
+      }
+    });
+  });
+
   it("parses provider and runtime flags for print mode", () => {
     const cwd = process.cwd();
 
@@ -734,10 +856,12 @@ describe("CLI runner", () => {
 
     await expect(runCli(["--help"], captured.io, { version: "1.2.3" })).resolves.toBe(0);
     expect(captured.stdout.join("")).toContain("OpenHarness");
+    expect(captured.stdout.join("")).toContain("openharness --tui");
     expect(captured.stdout.join("")).toContain("openharness --print <prompt>");
+    expect(captured.stdout.join("")).toContain("Start the Alpha terminal UI");
     expect(captured.stdout.join("")).toContain("--output-format <format>");
     expect(captured.stdout.join("")).toContain(
-      "print mode only when a provider is configured"
+      "explicit TUI mode and print mode"
     );
     expect(captured.stderr).toEqual([]);
   });
@@ -953,6 +1077,66 @@ describe("CLI runner", () => {
     }
   });
 
+  it("runs explicit TUI mode through the injected runner without stdout or stderr", async () => {
+    const root = createTempDir("openharness-cli-tui-runner-");
+    const captured = createCapturedIo();
+    const sdkOptions: DeepSeekSdkOptions[] = [];
+    const fakeSdk = createFakeSdkClient([[textDeltaChunk("unused")]]);
+    const tuiCalls: unknown[] = [];
+
+    try {
+      const exitCode = await runCli(
+        [
+          "--cwd",
+          root,
+          "--tui",
+          "--api-key",
+          "flag-key",
+          "--model",
+          "deepseek-tui",
+          "--permission-mode",
+          "plan",
+          "--max-turns",
+          "3",
+          "--no-color"
+        ],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient(options) {
+            sdkOptions.push(options);
+            return fakeSdk.client;
+          },
+          async runTui(options) {
+            tuiCalls.push(options);
+          }
+        }
+      );
+
+      expect(exitCode).toBe(0);
+      expect(captured.stdout).toEqual([]);
+      expect(captured.stderr).toEqual([]);
+      expect(sdkOptions).toEqual([
+        {
+          apiKey: "flag-key",
+          baseURL: "https://api.deepseek.com"
+        }
+      ]);
+      expect(tuiCalls).toHaveLength(1);
+      expect(tuiCalls[0]).toMatchObject({
+        cwd: root,
+        model: "deepseek-tui",
+        permissionMode: "plan",
+        colorMode: "none",
+        maxTurns: 3,
+        env: createIsolatedCliEnv(root)
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("returns the stable missing key error without creating an SDK client", async () => {
     const captured = createCapturedIo();
     const sdkOptions: DeepSeekSdkOptions[] = [];
@@ -972,6 +1156,70 @@ describe("CLI runner", () => {
       "DEEPSEEK_API_KEY is required. Set it in the environment or pass --api-key.\n"
     ]);
     expect(sdkOptions).toEqual([]);
+  });
+
+  it("redacts provider errors for explicit TUI mode", async () => {
+    const root = createTempDir("openharness-cli-tui-redaction-");
+    const captured = createCapturedIo();
+    let tuiCalled = false;
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--tui", "--api-key", "flag-secret"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient() {
+            throw new Error("provider failed with flag-secret");
+          },
+          async runTui() {
+            tuiCalled = true;
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(tuiCalled).toBe(false);
+      expect(captured.stdout).toEqual([]);
+      expect(captured.stderr.join("")).toContain("[REDACTED]");
+      expect(captured.stderr.join("")).not.toContain("flag-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts runner errors for explicit TUI mode", async () => {
+    const root = createTempDir("openharness-cli-tui-runner-redaction-");
+    const captured = createCapturedIo();
+    const fakeSdk = createFakeSdkClient([[textDeltaChunk("unused")]]);
+    let tuiCalls = 0;
+
+    try {
+      const exitCode = await runCli(
+        ["--cwd", root, "--tui", "--api-key", "flag-secret"],
+        captured.io,
+        {
+          version: "1.2.3",
+          env: createIsolatedCliEnv(root),
+          createSdkClient() {
+            return fakeSdk.client;
+          },
+          async runTui() {
+            tuiCalls += 1;
+            throw new Error("runtime failed with flag-secret");
+          }
+        }
+      );
+
+      expect(exitCode).toBe(1);
+      expect(tuiCalls).toBe(1);
+      expect(captured.stdout).toEqual([]);
+      expect(captured.stderr.join("")).toContain("[REDACTED]");
+      expect(captured.stderr.join("")).not.toContain("flag-secret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("writes parser errors to stderr only", async () => {

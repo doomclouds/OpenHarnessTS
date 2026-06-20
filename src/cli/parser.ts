@@ -22,6 +22,7 @@ export interface CliParseError {
 }
 
 export type CliOutputFormat = "text" | "json" | "stream-json";
+export type CliColorMode = "full" | "none";
 
 export interface CliPrintOptions {
   readonly prompt: string;
@@ -45,11 +46,22 @@ export interface CliDryRunOptions {
   readonly permissionMode?: PermissionMode;
 }
 
+export interface CliTuiOptions {
+  readonly cwd: string;
+  readonly model?: string;
+  readonly apiKey?: string;
+  readonly baseURL?: string;
+  readonly maxTurns?: number;
+  readonly permissionMode?: PermissionMode;
+  readonly colorMode?: CliColorMode;
+}
+
 export type CliParseResult =
   | { readonly type: "help" }
   | { readonly type: "version"; readonly version: string }
   | { readonly type: "print"; readonly options: CliPrintOptions }
   | { readonly type: "dry_run"; readonly options: CliDryRunOptions }
+  | { readonly type: "tui"; readonly options: CliTuiOptions }
   | { readonly type: "error"; readonly error: CliParseError };
 
 function missingPrintPrompt(): CliParseResult {
@@ -194,6 +206,9 @@ export function parseCliArgs(
   let permissionMode: PermissionMode | undefined;
   let outputFormat: CliOutputFormat = "text";
   let dryRun = false;
+  let tui = false;
+  let colorMode: CliColorMode | undefined;
+  let incompatibleWithTui: string | undefined;
 
   if (args.length === 0) {
     return {
@@ -238,6 +253,15 @@ export function parseCliArgs(
     }
 
     if (token === "--print") {
+      if (tui) {
+        incompatibleWithTui = "--print";
+        const value = args[index + 1];
+        if (value !== undefined && !value.startsWith("--")) {
+          index += 1;
+        }
+        continue;
+      }
+
       const value = args[index + 1];
 
       if (value === undefined || value.startsWith("--")) {
@@ -251,6 +275,7 @@ export function parseCliArgs(
       }
 
       printPrompt = prompt;
+      incompatibleWithTui = "--print";
       index += 1;
       continue;
     }
@@ -321,6 +346,15 @@ export function parseCliArgs(
     }
 
     if (token === "--output-format") {
+      if (tui) {
+        incompatibleWithTui = "--output-format";
+        const value = args[index + 1];
+        if (value !== undefined && !value.startsWith("--")) {
+          index += 1;
+        }
+        continue;
+      }
+
       const value = readNonEmptyOptionValue(args, index, "--output-format");
       if (typeof value !== "string") {
         return value;
@@ -332,16 +366,55 @@ export function parseCliArgs(
       }
 
       outputFormat = parsed;
+      incompatibleWithTui = "--output-format";
       index += 1;
       continue;
     }
 
     if (token === "--dry-run") {
       dryRun = true;
+      incompatibleWithTui = "--dry-run";
+      continue;
+    }
+
+    if (token === "--tui") {
+      tui = true;
+      continue;
+    }
+
+    if (token === "--no-color") {
+      colorMode = "none";
       continue;
     }
 
     return unknownOption(token);
+  }
+
+  if (tui) {
+    if (incompatibleWithTui !== undefined || printPrompt !== undefined || dryRun) {
+      return invalidOptionValue(
+        "--tui",
+        incompatibleWithTui ?? (printPrompt !== undefined ? "--print" : "--dry-run"),
+        "--tui cannot be combined with --print, --dry-run, or --output-format."
+      );
+    }
+
+    return {
+      type: "tui",
+      options: {
+        cwd,
+        ...(model === undefined ? {} : { model }),
+        ...(apiKey === undefined ? {} : { apiKey }),
+        ...(baseURL === undefined ? {} : { baseURL }),
+        ...(maxTurns === undefined ? {} : { maxTurns }),
+        ...(permissionMode === undefined ? {} : { permissionMode }),
+        ...(colorMode === undefined ? {} : { colorMode })
+      }
+    };
+  }
+
+  if (colorMode !== undefined) {
+    return unknownOption("--no-color");
   }
 
   if (dryRun) {

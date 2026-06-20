@@ -72,6 +72,9 @@ export function buildProjectRuntime(
     hookExecutor,
     systemPrompt: prompt.prompt,
     toolMetadata,
+    ...(options.initialMessages === undefined
+      ? {}
+      : { initialMessages: options.initialMessages }),
     ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
     ...(options.maxTurns === undefined ? {} : { maxTurns: options.maxTurns }),
     ...(options.signal === undefined ? {} : { signal: options.signal })

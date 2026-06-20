@@ -2,6 +2,7 @@ import type { ApiClient } from "../api/index.js";
 import type { ProjectPaths, ResolveProjectPathsOptions } from "../config/index.js";
 import type { QueryEngine } from "../engine/index.js";
 import type { HookExecutor } from "../hooks/index.js";
+import type { ConversationMessage } from "../messages/index.js";
 import type { PermissionChecker, PermissionMode } from "../permissions/index.js";
 import type { RuntimePromptResult } from "../prompts/index.js";
 import type { SessionBackend } from "../sessions/index.js";
@@ -33,6 +34,7 @@ export interface BuildProjectRuntimeOptions extends ResolveProjectPathsOptions {
   readonly sessionBackend?: SessionBackend;
   readonly systemPrompt?: string;
   readonly customSystemPrompt?: string;
+  readonly initialMessages?: readonly ConversationMessage[];
   readonly maxTokens?: number;
   readonly maxTurns?: number;
   readonly signal?: AbortSignal;

@@ -164,6 +164,22 @@ describe("QueryEngine plain text facade", () => {
     ]);
   });
 
+  it("passes the engine abort signal to API requests", async () => {
+    const controller = new AbortController();
+    const client = new ScriptedApiClient([[textComplete("done")]]);
+    const engine = new QueryEngine({
+      apiClient: client,
+      cwd: "C:/WorkSpace/ResearchProjects/OpenHarnessTS",
+      model: "mock-model",
+      systemPrompt: "You are a test assistant.",
+      signal: controller.signal
+    });
+
+    await collectEvents(engine.submitMessage("abortable"));
+
+    expect(client.requests[0]?.signal).toBe(controller.signal);
+  });
+
   it("rejects assistant messages before mutating history", async () => {
     const client = new ScriptedApiClient([[textComplete("unused")]]);
     const engine = new QueryEngine({

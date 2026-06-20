@@ -163,7 +163,10 @@ export class DeepSeekApiClient implements ApiClient {
       ...(this.thinking !== undefined ? { thinking: this.thinking } : {})
     };
 
-    const stream = await this.sdkClient.chat.completions.create(params);
+    const stream = await this.sdkClient.chat.completions.create(
+      params,
+      ...(request.signal === undefined ? [] : [{ signal: request.signal }])
+    );
     const visibleText: string[] = [];
     const reasoningText: string[] = [];
     const toolCalls = new Map<number, ToolCallAccumulator>();

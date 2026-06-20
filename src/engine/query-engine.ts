@@ -34,6 +34,7 @@ export interface QueryEngineOptions {
   readonly maxTurns?: number;
   readonly signal?: AbortSignal;
   readonly toolMetadata?: Readonly<Record<string, unknown>>;
+  readonly initialMessages?: readonly ConversationMessage[];
 }
 
 export class QueryEngine {
@@ -104,6 +105,9 @@ export class QueryEngine {
     }
     if (options.toolMetadata !== undefined) {
       this.toolMetadata = options.toolMetadata;
+    }
+    if (options.initialMessages !== undefined) {
+      this.messages.push(...options.initialMessages);
     }
   }
 

@@ -171,8 +171,95 @@ interface BuiltPrintEnvelope {
   }[];
 }
 
+interface BuiltTuiEnvelope {
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly sdkOptions: readonly {
+    readonly apiKey?: string;
+    readonly baseURL?: string;
+  }[];
+  readonly tuiCalls: readonly {
+    readonly cwd?: string;
+    readonly model?: string;
+    readonly colorMode?: string;
+  }[];
+}
+
 function getBuiltCliModuleUrl(): string {
   return pathToFileURL(distCliPath).href;
+}
+
+async function writeBuiltTuiRunner(args: {
+  readonly root: string;
+  readonly cwd: string;
+}): Promise<string> {
+  const runnerPath = join(args.root, "built-tui.mjs");
+  const runnerSource = `
+import { runCli } from ${JSON.stringify(getBuiltCliModuleUrl())};
+
+const stdout = [];
+const stderr = [];
+const sdkOptions = [];
+const tuiCalls = [];
+const capturedIo = {
+  stdout(text) {
+    stdout.push(text);
+  },
+  stderr(text) {
+    stderr.push(text);
+  }
+};
+const env = process.env;
+const exitCode = await runCli(
+  [
+    "--cwd",
+    ${JSON.stringify(args.cwd)},
+    "--tui",
+    "--api-key",
+    "flag-key",
+    "--model",
+    "deepseek-test",
+    "--no-color"
+  ],
+  capturedIo,
+  {
+    env,
+    createSdkClient(options) {
+      sdkOptions.push(options);
+      return {
+        chat: {
+          completions: {
+            async create() {
+              throw new Error("Injected TUI smoke SDK should not stream.");
+            }
+          }
+        }
+      };
+    },
+    async runTui(options) {
+      tuiCalls.push({
+        cwd: options.cwd,
+        model: options.model,
+        colorMode: options.colorMode
+      });
+    }
+  }
+);
+
+process.stdout.write(
+  JSON.stringify({
+    exitCode,
+    stdout: stdout.join(""),
+    stderr: stderr.join(""),
+    sdkOptions,
+    tuiCalls
+  })
+);
+`;
+  await writeFile(runnerPath, runnerSource, "utf8");
+
+  return runnerPath;
 }
 
 async function writeBuiltPrintRunner(args: {
@@ -404,6 +491,39 @@ describe("built CLI executable smoke", () => {
         expectStderrOnlyFailure(result);
         expect(result.stderr).toContain(testCase.stderr);
       }
+    } finally {
+      removeTempRoot(root);
+    }
+  });
+
+  it("routes explicit TUI mode through the injected built runner", async () => {
+    const root = createTempRoot("openharness-built-tui-");
+    const cwd = createIsolatedProjectRoot(root, "project");
+
+    try {
+      const runnerPath = await writeBuiltTuiRunner({ root, cwd });
+      const runner = await runProcess([runnerPath], {
+        env: createIsolatedEnv(root)
+      });
+
+      expectCleanSuccess(runner);
+      const envelope = JSON.parse(runner.stdout) as BuiltTuiEnvelope;
+      expect(envelope.exitCode).toBe(0);
+      expect(envelope.stdout).toBe("");
+      expect(envelope.stderr).toBe("");
+      expect(envelope.sdkOptions).toEqual([
+        {
+          apiKey: "flag-key",
+          baseURL: "https://api.deepseek.com"
+        }
+      ]);
+      expect(envelope.tuiCalls).toEqual([
+        {
+          cwd,
+          model: "deepseek-test",
+          colorMode: "none"
+        }
+      ]);
     } finally {
       removeTempRoot(root);
     }
